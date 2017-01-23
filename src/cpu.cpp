@@ -221,6 +221,8 @@ int main() {
 
 
   // ### produce fills ###
+  // in : input, chids, k
+  // out: chids
   vector<uint64_t> heads(k);
   adjacent_difference(begin(input), end(input), begin(heads));
   heads.front() = 1; // not sure about this one
@@ -229,14 +231,17 @@ int main() {
   //}
   for (size_t i = 0; i < k; ++i) {
     if (heads[i] == 0) {
-      chids[i] = chids[i] - chids[i] - 1;
+      chids[i] = chids[i] - chids[i - 1] - 1;
     } else {
-      chids[i] = chids[i] - 1;
+      if (chids[i] != 0)
+        chids[i] = chids[i] - 1;
     }
   }
 
 
   // ### fuse fill literals ###
+  // in : chids, lits, k
+  // out: index, index_length
   vector<uint32_t> index(2 * k);
   for (size_t i = 0; i < k; ++i) {
     index[2 * i] = chids[i];
@@ -247,6 +252,8 @@ int main() {
 
 
   // ### compute comlumn len ###
+  // in : chids, input, n
+  // out: keycnt, offsets
   vector<uint32_t> tmp(k);
   for (size_t i = 0; i < k; ++i) {
     tmp[i] = (1 + (chids[i] == 0 ? 0 : 1));
@@ -270,6 +277,10 @@ int main() {
     //  cout << "[" << j << "] " << as_binary(index[offset + j]) << endl;
     //}
     //cout << endl;
+  }
+  cout << "Complete index is:" << endl;
+  for (auto& i : index) {
+    cout << "> " << as_binary(i) << endl;
   }
 }
 
