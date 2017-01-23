@@ -1,5 +1,6 @@
 
 #include <cmath>
+#include <random>
 #include <vector>
 #include <cassert>
 #include <iomanip>
@@ -154,20 +155,12 @@ size_t stream_compaction(vector<T>& index, T val = 0) {
   return index.size();
 }
 
-} // namespace <anonymous>
+// WAH Algorithm ...
 
-int main() {
-  vector<uint32_t> values{10,  7, 22,  6,  7,
-                           1,  9, 42,  2,  5,
-                          13,  3,  2,  1,  0,
-                           1, 18, 18,  3, 13};
-
-  auto input = values;
-
-  // ### sort rids by value ###
-  // in : input
-  // out: input, rids (both sorted by input)
-  vector<uint32_t> rids(input.size());
+// in : input
+// out: input, rids (both sorted by input)
+void sort_rids_by_value(vector<uint32_t>& input, vector<uint32_t>& rids) {
+  assert(input.size() == rids.size());
   iota(begin(rids), end(rids), 0);
   for (size_t i = (input.size() - 1); i > 0; --i) {
     for (size_t j = 0; j < i; ++j) {
@@ -183,62 +176,34 @@ int main() {
       }
     }
   }
-  // for (size_t i = 0; i < input.size(); ++i) {
-  //   cout << input[i] << " --> " << rids[i] << endl;
-  // }
+}
 
-
-  // ### produce chuck id literal ###
-  // in : rids, n (length)
-  // out: chids
-  vector<uint32_t> chids(input.size());
-  vector<uint32_t> lits(input.size());
-  for (size_t i = 0; i < input.size(); ++i) {
+// in : rids, n (length)
+// out: chids, lits
+void produce_chunck_id_literals(vector<uint32_t>& rids,
+                                vector<uint32_t>& chids,
+                                vector<uint32_t>& lits) {
+  assert(rids.size() == chids.size());
+  assert(rids.size() == lits.size());
+  for (size_t i = 0; i < rids.size(); ++i) {
     chids[i] = rids[i] / 31;
     lits[i]  = 0x1 << (rids[i] % 31);
     lits[i] |= 0x1 << 31;
   }
+}
 
+// in : input, chids, lits, n (length)
+// out: input, chids, lits but reduced to length k
+size_t merged_lit_by_val_chids(vector<uint32_t>& input,
+                               vector<uint32_t>& chids,
+                               vector<uint32_t>& lits) {
+  return reduce_by_key(input, chids, lits);
+}
 
-  // ### merge lit by val chids ###
-  // in : input, chids, lits, n (length)
-  // out: input, chids, lits but reduced to length k
-  // auto prev_size = input.size();
-  auto k = reduce_by_key(input, chids, lits);
-  /*
-  cout << "Reduced from " << prev_size << " to " << k << " input" << endl;
-  for (size_t i = 0; i < k; ++i) {
-    cout << as_binary(input[i]) << as_binary(chids[i])
-         << " --> " << as_binary(lits[i]) << endl;
-  }
-  */
-  /*
-  vector<uint64_t> keys(input.size());
-  for (size_t i = 0; i < input.size(); ++i) {
-    keys[i] = (uint64_t(input[i]) << 32) | chids[i];
-  }
-  // algorithm: reduce by key
-  for (size_t i = 0; i < input.size(); ++i) {
-    cout << as_binary(keys[i]) << " --> " << as_binary(lits[i]) << endl;
-  }
-  auto prev_size = keys.size();
-  auto k = reduce_by_key(keys, lits);
-  cout << "Reduced from " << prev_size << " to " << k << " input" << endl;
-  for (size_t i = 0; i < k; ++i) {
-    cout << as_binary(keys[i]) << " --> " << as_binary(lits[i]) << endl;
-  }
-  // move keys back to input and chids
-  for (size_t i = 0; i < keys.size(); ++i) {
-    // keys[i] = (uint64_t(input[i]) << 32) | chids[i];
-    input[i] = static_cast<uint32_t>(keys[i] >> 32);
-    chids[i]  = static_cast<uint32_t>(keys[i]);
-  }
-  */
-
-
-  // ### produce fills ###
-  // in : input, chids, k (reduced length)
-  // out: chids with 0-fill symbols
+// in : input, chids, k (reduced length)
+// out: chids with 0-fill symbols
+void produce_fills(vector<uint32_t>& input,
+                   vector<uint32_t>& chids, size_t k) {
   vector<uint64_t> heads(k);
   adjacent_difference(begin(input), end(input), begin(heads));
   heads.front() = 1; // not sure about this one
@@ -253,51 +218,91 @@ int main() {
         chids[i] = chids[i] - 1;
     }
   }
+}
 
-
-  // ### fuse fill literals ###
-  // in : chids, lits, k
-  // out: index, index_length
-  vector<uint32_t> index(2 * k);
+// in : chids, lits, k
+// out: index, index_length
+size_t fuse_fill_literals(vector<uint32_t>& chids,
+                          vector<uint32_t>& lits,
+                          vector<uint32_t>& index,
+                          size_t k) {
+  assert(chids.size() == k);
+  assert(lits.size() == k);
+  assert(index.size() >= 2*k);
   for (size_t i = 0; i < k; ++i) {
     index[2 * i] = chids[i];
     index[2 * i + 1] = lits[i];
   }
-  auto idx_length = stream_compaction(index, 0u);
-  cout << "Created index of length: " << idx_length << endl;
+  return stream_compaction(index, 0u);
+}
 
-
-  // ### compute comlumn len ###
-  // in : chids, input, n
-  // out: keycnt, offsets
+// in : chids, input, n
+// out: keycnt, offsets
+size_t compute_colum_length(vector<uint32_t>& input,
+                            vector<uint32_t>& chids,
+                            vector<uint32_t>& offsets,
+                            size_t k) {
   vector<uint32_t> tmp(k);
   for (size_t i = 0; i < k; ++i) {
     tmp[i] = (1 + (chids[i] == 0 ? 0 : 1));
   }
   auto keycnt = reduce_by_key(input, tmp);
-  cout << "Created index for values:" << endl;
-  for (size_t i = 0; i < values.size(); ++i) {
-    cout << "> " << values[i] << endl;
-  }
-  //vector<uint32_t> offsets = inclusive_scan(tmp);
-  vector<uint32_t> offsets = exclusive_scan(tmp);
+  offsets = exclusive_scan(tmp);
+  return keycnt;
+}
 
+} // namespace <anonymous>
+
+int main() {
+  //vector<uint32_t> values{10,  7, 22,  6,  7,
+  //                         1,  9, 42,  2,  5,
+  //                        13,  3,  2,  1,  0,
+  //                         1, 18, 18,  3, 13};
+
+  auto amount = 100;
+  std::mt19937 rng;
+  rng.seed(std::random_device()());
+  std::uniform_int_distribution<uint32_t> dist(0,10);
+  vector<uint32_t> values(amount);
+  for (int i = 0; i < amount; ++i)
+    values[i] = dist(rng);
+
+  auto input = values;
+  vector<uint32_t> rids(input.size());
+  vector<uint32_t> chids(input.size());
+  vector<uint32_t> lits(input.size());
+
+  sort_rids_by_value(input, rids);
+  produce_chunck_id_literals(rids, chids, lits);
+  auto k = merged_lit_by_val_chids(input, chids, lits);
+  produce_fills(input, chids, k);
+  vector<uint32_t> index(2 * k);
+  auto idx_length = fuse_fill_literals(chids, lits, index, k);
+  vector<uint32_t> offsets(k);
+  auto keycnt = compute_colum_length(input, chids, offsets, k);
+
+  cout << "Created index for " << amount
+       << " values, with " << idx_length
+       << " entries" << endl;
 
   // Searching for some sensible output format
   for (size_t i = 0; i < keycnt; ++i) {
     auto value = input[i];
-    auto length = tmp[i];
     auto offset = offsets[i];
+    auto length = (i == keycnt - 1) ? index.size() - offsets[i]
+                                    : offsets[i + 1] - offsets[i];
     cout << "Index for value " << value << ":" << endl
-         << "> has length " << length << " and offset " << offset << endl;
-    //for (size_t j = 0; j < length; ++j) {
-    //  cout << "[" << j << "] " << as_binary(index[offset + j]) << endl;
-    //}
-    //cout << endl;
+         << "> length " << length << endl << "> offset " << offset << endl;
+    for (size_t j = 0; j < length; ++j) {
+      cout << as_binary(index[offset + j]) << " ";
+    }
+    cout << endl << endl;
   }
+  /*
   cout << "Complete index is:" << endl;
   for (auto& i : index) {
     cout << "> " << as_binary(i) << endl;
   }
+  */
 }
 
