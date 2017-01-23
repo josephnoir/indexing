@@ -31,7 +31,7 @@ else ()
 endif ()
 
 # set(CAF_ROOT_DIR "/Users/noir/Git/actor-framework/build")
-find_package(CAF COMPONENTS core io)
+find_package(CAF COMPONENTS core io opencl)
 if (CAF_FOUND)
   include_directories(${CAF_INCLUDE_DIRS})
 else ()
@@ -40,10 +40,16 @@ endif ()
 
 include_directories(. include)
 
-set(SOURCES
+set(SOURCES_CPU
   src/cpu.cpp
+)
+set(SOURCES_GPU
+  src/gpu.cpp
 )
 file(GLOB_RECURSE HEADERS "include/*.hpp")
 
-add_executable(cpu ${SOURCES} ${HEADERS})
+add_executable(cpu ${SOURCES_CPU} ${HEADERS})
 target_link_libraries(cpu ${CMAKE_DL_LIBS} ${CAF_LIBRARY_CORE} ${CAF_LIBRARY_IO})
+
+add_executable(gpu ${SOURCES_GPU} ${HEADERS})
+target_link_libraries(gpu ${CMAKE_DL_LIBS} ${CAF_LIBRARY_CORE} ${CAF_LIBRARY_IO} ${CAF_LIBRARY_OPENCL})
