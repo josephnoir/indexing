@@ -139,6 +139,16 @@ vector<T> inclusive_scan(const vector<T>& vals) {
 }
 
 template<class T>
+vector<T> exclusive_scan(const vector<T>& vals) {
+  vector<T> results(vals.size());
+  results[0] = 0;
+  for (size_t i = 1; i < vals.size(); ++i) {
+    results[i] = results[i - 1] + vals[i - 1];
+  }
+  return results;
+}
+
+template<class T>
 size_t stream_compaction(vector<T>& index, T val = 0) {
   index.erase(remove(begin(index), end(index), val), end(index));
   return index.size();
@@ -155,6 +165,8 @@ int main() {
   auto input = values;
 
   // ### sort rids by value ###
+  // in : input
+  // out: input, rids (both sorted by input)
   vector<uint32_t> rids(input.size());
   iota(begin(rids), end(rids), 0);
   for (size_t i = (input.size() - 1); i > 0; --i) {
@@ -177,6 +189,8 @@ int main() {
 
 
   // ### produce chuck id literal ###
+  // in : rids, n (length)
+  // out: chids
   vector<uint32_t> chids(input.size());
   vector<uint32_t> lits(input.size());
   for (size_t i = 0; i < input.size(); ++i) {
@@ -187,6 +201,8 @@ int main() {
 
 
   // ### merge lit by val chids ###
+  // in : input, chids, lits, n (length)
+  // out: input, chids, lits but reduced to length k
   // auto prev_size = input.size();
   auto k = reduce_by_key(input, chids, lits);
   /*
@@ -221,8 +237,8 @@ int main() {
 
 
   // ### produce fills ###
-  // in : input, chids, k
-  // out: chids
+  // in : input, chids, k (reduced length)
+  // out: chids with 0-fill symbols
   vector<uint64_t> heads(k);
   adjacent_difference(begin(input), end(input), begin(heads));
   heads.front() = 1; // not sure about this one
@@ -263,7 +279,8 @@ int main() {
   for (size_t i = 0; i < values.size(); ++i) {
     cout << "> " << values[i] << endl;
   }
-  vector<uint32_t> offsets = inclusive_scan(tmp);
+  //vector<uint32_t> offsets = inclusive_scan(tmp);
+  vector<uint32_t> offsets = exclusive_scan(tmp);
 
 
   // Searching for some sensible output format
