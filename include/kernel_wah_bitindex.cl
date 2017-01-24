@@ -1,26 +1,10 @@
+/*
+ * function: wah_bitmap
+ * input:    32-bit integer
+ * output:   wah compressed bitmap index, offsets for its values
+ * table:    
+ */
 
-#include <cmath>
-#include <random>
-#include <vector>
-#include <cassert>
-#include <iomanip>
-#include <numeric>
-#include <sstream>
-#include <iostream>
-#include <algorithm>
-
-#include "caf/all.hpp"
-#include "caf/opencl/all.hpp"
-
-using namespace std;
-using namespace caf;
-using namespace caf::opencl;
-
-namespace {
-
-constexpr const char* kernel_name = "kernel_wah_index";
-constexpr const char* kernel_file = "kernel_wah_index.cl";
-constexpr const char* kernel_source = R"__(
 void sort_rids_by_value(__global uint* input, __global  uint* rids,
                         size_t idx, size_t total);
 void parallel_selection_sort(__global uint* key, __global uint* data,
@@ -50,8 +34,8 @@ __kernel void kernel_wah_index(__global uint* input,
   //__gloabl uint[index_size] rids;
   sort_rids_by_value(input, rids, idx, total);
   barrier(CLK_GLOBAL_MEM_FENCE);
-  produce_chunck_id_literals(rids, chids, lits, idx, total);
-  barrier(CLK_GLOBAL_MEM_FENCE);
+  //produce_chunck_id_literals(rids, chids, lits, idx, total);
+  //barrier(CLK_GLOBAL_MEM_FENCE);
 /*
   auto k = merged_lit_by_val_chids(input, chids, lits);
   produce_fills(input, chids, k);
@@ -126,115 +110,3 @@ void parallel_selection_sort(__global uint* key, __global uint* data,
   key[pos] = key_value;
   data[pos] = data_value;
 }
-)__";
-
-
-template<class T>
-string as_binary(T num) {
-  stringstream s;
-  auto num_bits = (sizeof(T) * 8);
-  T mask = T(0x1) << (num_bits - 1);
-  while (mask > 0) {
-    s << ((num & mask) ? "1" : "0");
-    mask >>= 1;
-  }
-  return s.str();
-}
-
-void indexer(event_based_actor* self) {
-  auto amount = 10;
-  std::mt19937 rng;
-  rng.seed(std::random_device()());
-  std::uniform_int_distribution<uint32_t> dist(0,10);
-  vector<uint32_t> values(amount);
-  for (int i = 0; i < amount; ++i)
-    values[i] = dist(rng);
-
-/*
-  for (auto& val : values)
-    cout << val << " ";
-  cout << endl;
-*/
-
-  vector<uint32_t> input = values;
-  vector<uint32_t> rids(input.size());
-  vector<uint32_t> chids(input.size());
-  vector<uint32_t> lits(input.size());
-
-  vector<uint32_t> index(2 * amount);
-  vector<uint32_t> offsets(amount);
-  size_t idx_length = 0;
-  size_t keycnt = 0;
-
-  vector<uint32_t> config{static_cast<uint32_t>(input.size()),
-                          static_cast<uint32_t>(rids.size()),
-                          static_cast<uint32_t>(chids.size()),
-                          static_cast<uint32_t>(lits.size()),
-                          static_cast<uint32_t>(index.size()),
-                          static_cast<uint32_t>(offsets.size())};
-
-  auto worker = self->system().opencl_manager().spawn(
-    kernel_source, kernel_name,
-    spawn_config{dim_vec{static_cast<size_t>(amount)}},
-    in_out<vector<uint32_t>>{}, in_out<vector<uint32_t>>{},
-    in_out<vector<uint32_t>>{}, in_out<vector<uint32_t>>{},
-    in_out<vector<uint32_t>>{}, in_out<vector<uint32_t>>{},
-    in_out<vector<uint32_t>>{}
-  );
-  // send both matrices to the actor and wait for a result
-  self->request(worker, chrono::seconds(30), move(input), move(rids),
-                move(index), move(offsets), move(config)).then(
-    [](const vector<uint32_t>& input, const vector<uint32_t>& rids,
-       const vector<uint32_t>& chids, const vector<uint32_t>& lits,
-       const vector<uint32_t>& index, const vector<uint32_t>& offsets,
-       const vector<uint32_t>& config) {
-      cout << "received some stuff!" << endl;
-      static_cast<void>(input);
-      static_cast<void>(rids);
-      static_cast<void>(chids);
-      static_cast<void>(lits);
-      static_cast<void>(index);
-      static_cast<void>(offsets);
-      static_cast<void>(config);
-/*
-      for (auto& val : input)
-        cout << val << " ";
-      cout << endl;
-
-      for (auto& val : rids)
-        cout << val << " ";
-      cout << endl;
-*/
-
-      // cout << "Created index for " << amount
-      //      << " values, with " << idx_length
-      //      << " entries" << endl;
-
-      // // Searching for some sensible output format
-      // for (size_t i = 0; i < keycnt; ++i) {
-      //   auto value = input[i];
-      //   auto offset = offsets[i];
-      //   auto length = (i == keycnt - 1) ? index.size() - offsets[i]
-      //                                   : offsets[i + 1] - offsets[i];
-      //   cout << "Index for value " << value << ":" << endl
-      //        << "> length " << length << endl << "> offset " << offset << endl;
-      //   for (size_t j = 0; j < length; ++j) {
-      //     cout << as_binary(index[offset + j]) << " ";
-      //   }
-      //   cout << endl << endl;
-      // }
-    }
-  );
-}
-
-} // namespace <anonymous>
-
-int main() {
-  actor_system_config cfg;
-  cfg.load<opencl::manager>()
-     .add_message_type<vector<uint32_t>>("data_vector");
-  actor_system system{cfg};
-  system.spawn(indexer);
-  system.await_all_actors_done();
-}
-
