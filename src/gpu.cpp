@@ -29,12 +29,12 @@ void produce_chunck_id_literals(__global uint* rids, __global uint* chids,
                                 __global uint* lits, size_t idx, size_t total);
 
 __kernel void kernel_wah_index(__global uint* input,
-                               __global uint* rids,
-                               __global uint* chids,
-                               __global uint* lits,
+                               __global uint* config,
                                __global uint* index,
                                __global uint* offsets,
-                               __global uint* config) {
+                               __global uint* rids,
+                               __global uint* chids,
+                               __global uint* lits) {
   // just 1 dimension here: 0
   size_t total = get_global_size(0);
   size_t idx = get_global_id(0);
@@ -50,8 +50,8 @@ __kernel void kernel_wah_index(__global uint* input,
   //__gloabl uint[index_size] rids;
   sort_rids_by_value(input, rids, idx, total);
   barrier(CLK_GLOBAL_MEM_FENCE);
-  produce_chunck_id_literals(rids, chids, lits, idx, total);
-  barrier(CLK_GLOBAL_MEM_FENCE);
+  //produce_chunck_id_literals(rids, chids, lits, idx, total);
+  //barrier(CLK_GLOBAL_MEM_FENCE);
 /*
   auto k = merged_lit_by_val_chids(input, chids, lits);
   produce_fills(input, chids, k);
@@ -142,12 +142,12 @@ string as_binary(T num) {
 }
 
 void indexer(event_based_actor* self) {
-  auto amount = 10;
+  size_t amount = 10;
   std::mt19937 rng;
   rng.seed(std::random_device()());
   std::uniform_int_distribution<uint32_t> dist(0,10);
   vector<uint32_t> values(amount);
-  for (int i = 0; i < amount; ++i)
+  for (size_t i = 0; i < amount; ++i)
     values[i] = dist(rng);
 
 /*
@@ -157,54 +157,35 @@ void indexer(event_based_actor* self) {
 */
 
   vector<uint32_t> input = values;
-  vector<uint32_t> rids(input.size());
-  vector<uint32_t> chids(input.size());
-  vector<uint32_t> lits(input.size());
-
   vector<uint32_t> index(2 * amount);
   vector<uint32_t> offsets(amount);
-  size_t idx_length = 0;
-  size_t keycnt = 0;
 
-  vector<uint32_t> config{static_cast<uint32_t>(input.size()),
-                          static_cast<uint32_t>(rids.size()),
-                          static_cast<uint32_t>(chids.size()),
-                          static_cast<uint32_t>(lits.size()),
-                          static_cast<uint32_t>(index.size()),
-                          static_cast<uint32_t>(offsets.size())};
+  vector<uint32_t> config{static_cast<uint32_t>(amount),      // input
+                          static_cast<uint32_t>(amount),      // rids
+                          static_cast<uint32_t>(amount),      // chids
+                          static_cast<uint32_t>(amount),      // lits
+                          static_cast<uint32_t>(amount * 2),  // index
+                          static_cast<uint32_t>(amount)};     // offsets
 
   auto worker = self->system().opencl_manager().spawn(
     kernel_source, kernel_name,
-    spawn_config{dim_vec{static_cast<size_t>(amount)}},
-    in_out<vector<uint32_t>>{}, in_out<vector<uint32_t>>{},
-    in_out<vector<uint32_t>>{}, in_out<vector<uint32_t>>{},
-    in_out<vector<uint32_t>>{}, in_out<vector<uint32_t>>{},
-    in_out<vector<uint32_t>>{}
+    spawn_config{dim_vec{amount}},
+    in<vector<uint32_t>>{},             // input
+    in_out<vector<uint32_t>>{},         // config
+    out<vector<uint32_t>>{},            // index
+    out<vector<uint32_t>>{},            // offsets
+    buffer<vector<uint32_t>>{amount},   // rids
+    buffer<vector<uint32_t>>{amount},   // chids
+    buffer<vector<uint32_t>>{amount}    // lits
   );
   // send both matrices to the actor and wait for a result
-  self->request(worker, chrono::seconds(30), move(input), move(rids),
-                move(index), move(offsets), move(config)).then(
-    [](const vector<uint32_t>& input, const vector<uint32_t>& rids,
-       const vector<uint32_t>& chids, const vector<uint32_t>& lits,
-       const vector<uint32_t>& index, const vector<uint32_t>& offsets,
-       const vector<uint32_t>& config) {
+  self->request(worker, chrono::seconds(30), move(input), move(config)).then(
+    [](const vector<uint32_t>& config, const vector<uint32_t>& index,
+       const vector<uint32_t>& offsets) {
       cout << "received some stuff!" << endl;
-      static_cast<void>(input);
-      static_cast<void>(rids);
-      static_cast<void>(chids);
-      static_cast<void>(lits);
       static_cast<void>(index);
       static_cast<void>(offsets);
       static_cast<void>(config);
-/*
-      for (auto& val : input)
-        cout << val << " ";
-      cout << endl;
-
-      for (auto& val : rids)
-        cout << val << " ";
-      cout << endl;
-*/
 
       // cout << "Created index for " << amount
       //      << " values, with " << idx_length

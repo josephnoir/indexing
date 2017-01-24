@@ -13,12 +13,12 @@ void produce_chunck_id_literals(__global uint* rids, __global uint* chids,
                                 __global uint* lits, size_t idx, size_t total);
 
 __kernel void kernel_wah_index(__global uint* input,
-                               __global uint* rids,
-                               __global uint* chids,
-                               __global uint* lits,
+                               __global uint* config,
                                __global uint* index,
                                __global uint* offsets,
-                               __global uint* config) {
+                               __global uint* rids,
+                               __global uint* chids,
+                               __global uint* lits) {
   // just 1 dimension here: 0
   size_t total = get_global_size(0);
   size_t idx = get_global_id(0);
@@ -49,6 +49,7 @@ __kernel void kernel_wah_index(__global uint* input,
 void sort_rids_by_value(__global uint* input, __global uint* rids,
                         size_t idx, size_t total) {
   rids[idx] = idx;
+  barrier(CLK_GLOBAL_MEM_FENCE); // is this needed here?
   // sort by input value
   parallel_selection_sort(input, rids, idx, total);
 }
