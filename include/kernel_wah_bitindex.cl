@@ -18,12 +18,17 @@ size_t merged_lit_by_val_chids(global uint* input, global uint* chids,
 void produce_fills(global uint* input, global uint* chids,
                    size_t idx, size_t total);
 size_t fuse_fill_literals(global uint* chids, global uint* lits,
-                          global uint* index, size_t idx, size_t k);
+                          global uint* index, size_t idx, size_t total);
+size_t compute_colum_length(global uint* input, global uint* chids,
+                            global uint* offsets, size_t idx, size_t total);
+
 // helper functions
 void parallel_selection_sort(global uint* key, global uint* data,
                              size_t idx, size_t total);
 size_t reduce_by_key_OR(local ulong* keys, global uint* lits,
                         size_t idx, size_t total);
+size_t reduce_by_key_SUM(global uint* input, local uint* tmp,
+                         size_t idx, size_t total);
 
 // main kernel
 kernel void kernel_wah_index(global uint* input,
@@ -81,10 +86,8 @@ kernel void kernel_wah_index(global uint* input,
   produce_fills(input, chids, idx, k);
   barrier(FENCE_TYPE);
   config[4] = fuse_fill_literals(chids, lits, index, idx, k);
-/*
-  vector<uint> offsets(k);
-  auto keycnt = compute_colum_length(input, chids, offsets, k);
-*/
+  uint keycnt = compute_colum_length(input, chids, offsets, idx, k);
+  (void) keycnt;
 }
 
 void sort_rids_by_value(global uint* input,global uint* rids,
@@ -173,6 +176,14 @@ size_t fuse_fill_literals(global uint* chids, global uint* lits,
   return len;
 }
 
+size_t compute_colum_length(global uint* input, global uint* chids,
+                            global uint* offsets, size_t idx, size_t k) {
+  local uint tmp[WORK_GROUP_SIZE];
+  tmp[idx] = 1 + (chids[idx] == 0 ? 0 : 1);
+  uint keycnt = reduce_by_key_SUM(input, tmp, idx, k);
+  // inclusive scan to create offsets
+  return keycnt;
+}
 
 // Helper implementations
 
@@ -203,6 +214,11 @@ size_t reduce_by_key_OR(local ulong* keys, global uint* lits,
     }
   }
   return (uint) k;
+}
+
+size_t reduce_by_key_SUM(global uint* input, local uint* tmp,
+                         size_t idx, size_t total) {
+  return total;
 }
 
 /**
