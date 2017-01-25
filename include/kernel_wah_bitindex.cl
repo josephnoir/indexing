@@ -5,23 +5,37 @@
  * table:    
  */
 
-void sort_rids_by_value(__global uint* input, __global  uint* rids,
-                        size_t idx, size_t total);
-void parallel_selection_sort(__global uint* key, __global uint* data,
-                             size_t idx, size_t total);
-void produce_chunck_id_literals(__global uint* rids, __global uint* chids,
-                                __global uint* lits, size_t idx, size_t total);
+#define FENCE_TYPE CLK_LOCAL_MEM_FENCE
+#define WORK_GROUP_SIZE 1024
 
-__kernel void kernel_wah_index(__global uint* input,
-                               __global uint* config,
-                               __global uint* index,
-                               __global uint* offsets,
-                               __global uint* rids,
-                               __global uint* chids,
-                               __global uint* lits) {
+void sort_rids_by_value(global uint* input, global  uint* rids,
+                        size_t idx, size_t total);
+void produce_chunck_id_literals(global uint* rids, global uint* chids,
+                                global uint* lits, size_t idx, size_t total);
+size_t merged_lit_by_val_chids(global uint* input, global uint* chids,
+                               global uint* lits, size_t idx, size_t total);
+
+void parallel_selection_sort(global uint* key, global uint* data,
+                             size_t idx, size_t total);
+size_t reduce_by_key_OR(local ulong* keys, global uint* lits,
+                        size_t idx, size_t total);
+
+kernel void kernel_wah_index(global uint* input,
+                             global uint* config,
+                             global uint* index,
+                             global uint* offsets,
+                             global uint* rids,
+                             global uint* chids,
+                             global uint* lits) {
   // just 1 dimension here: 0
   size_t total = get_global_size(0);
   size_t idx = get_global_id(0);
+  if (total > WORK_GROUP_SIZE) {
+    offsets[idx] = total;
+    index[idx] = WORK_GROUP_SIZE;
+    return;
+  }
+
   // read config data
   // assumed to be == total, except idx, which is == 2 x total
   //uint input_size   = config[0];
@@ -33,12 +47,24 @@ __kernel void kernel_wah_index(__global uint* input,
 
   //__gloabl uint[index_size] rids;
   sort_rids_by_value(input, rids, idx, total);
-  barrier(CLK_GLOBAL_MEM_FENCE);
-  //produce_chunck_id_literals(rids, chids, lits, idx, total);
-  //barrier(CLK_GLOBAL_MEM_FENCE);
-/*
-  auto k = merged_lit_by_val_chids(input, chids, lits);
+  barrier(FENCE_TYPE);
+  //index[idx] = input[idx];
+  //offsets[idx] = rids[idx];
+  produce_chunck_id_literals(rids, chids, lits, idx, total);
+  barrier(FENCE_TYPE);
+  //index[idx] = rids[idx];
+  //offsets[idx] = lits[idx];
+  size_t k = merged_lit_by_val_chids(input, chids, lits, idx, total);
+  barrier(FENCE_TYPE);
+  /*
+  index[idx] = input[idx];
+  offsets[idx] = lits[idx];
+  config[3] = (uint) k;
+  config[5] = (uint) k;
+  */
   produce_fills(input, chids, k);
+  barrier(FENCE_TYPE);
+/*
   vector<uint> index(2 * k);
   auto idx_length = fuse_fill_literals(chids, lits, index, k);
   vector<uint> offsets(k);
@@ -46,20 +72,62 @@ __kernel void kernel_wah_index(__global uint* input,
 */
 }
 
-void sort_rids_by_value(__global uint* input, __global uint* rids,
+void sort_rids_by_value(global uint* input,global uint* rids,
                         size_t idx, size_t total) {
   rids[idx] = idx;
-  barrier(CLK_GLOBAL_MEM_FENCE); // is this needed here?
+  barrier(FENCE_TYPE); // is this needed here?
   // sort by input value
   parallel_selection_sort(input, rids, idx, total);
 }
 
-void produce_chunck_id_literals(__global uint* rids, __global uint* chids,
-                                __global uint* lits, size_t idx, size_t total) {
+void produce_chunck_id_literals(global uint* rids, global uint* chids,
+                                global uint* lits, size_t idx, size_t total) {
   (void) total;
-  lits[idx] = rids[idx] % 31u;
+  lits[idx] = 1u << (rids[idx] % 31u);
   lits[idx] |= 1u << 31;
   chids[idx] = (uint) rids[idx] / 31;
+}
+
+size_t merged_lit_by_val_chids(global uint* input, global uint* chids,
+                               global uint* lits, size_t idx, size_t total) {
+  local ulong keys[WORK_GROUP_SIZE];
+  keys[idx] = (((ulong) chids[idx]) << 32) | input[idx];
+  barrier(FENCE_TYPE);
+  size_t k = reduce_by_key_OR(keys, lits, idx, total);
+  barrier(FENCE_TYPE);
+  chids[idx] = (uint) (keys[idx] >> 32);
+  input[idx] = (uint) keys[idx];
+  return k;
+}
+
+
+size_t reduce_by_key_OR(local ulong* keys, global uint* lits,
+                        size_t idx, size_t total) {
+  local uint heads[WORK_GROUP_SIZE];
+  heads[idx] = idx == 0 ? 1 : (keys[idx] - keys[idx - 1]);
+  volatile local int k;
+  if (heads[idx] != 0) {
+    uint curr = idx + 1;
+    uint val = lits[idx];
+    while (heads[curr] == 0 && curr < total) {
+      val |= lits[curr];
+      curr += 1;
+    }
+    atomic_add(&k, 1);
+    lits[idx] = val;
+  }
+  barrier(FENCE_TYPE);
+  if (idx == 0) {
+    uint pos = 0;
+    for (uint i = 0; i < total; ++i) {
+      if (heads[i] != 0) {
+        keys[pos] = keys[i];
+        lits[pos] =lits[i];
+        pos += 1;
+      }
+    }
+  }
+  return (uint) k;
 }
 
 /**
@@ -96,7 +164,7 @@ void produce_chunck_id_literals(__global uint* rids, __global uint* chids,
  **/
 
 // One thread per record
-void parallel_selection_sort(__global uint* key, __global uint* data,
+void parallel_selection_sort(global uint* key, global uint* data,
                              size_t idx, size_t total) {
   uint key_value = key[idx];
   uint data_value = data[idx];
@@ -111,3 +179,4 @@ void parallel_selection_sort(__global uint* key, __global uint* data,
   key[pos] = key_value;
   data[pos] = data_value;
 }
+
