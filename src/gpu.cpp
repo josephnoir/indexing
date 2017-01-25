@@ -80,7 +80,7 @@ void indexer(event_based_actor* self, const string& kernel,
       static_cast<void>(index);
       static_cast<void>(offsets);
       static_cast<void>(config);
-      auto length = config[5];
+      auto length = config[4];
       cout << "Reduce index has length: " << length << endl;
       for (uint32_t i = 0; i < length; ++i) {
         cout << as_binary(index[i]) << " --> " << as_binary(offsets[i]) << endl;

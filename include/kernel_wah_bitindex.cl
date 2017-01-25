@@ -8,18 +8,24 @@
 #define FENCE_TYPE CLK_LOCAL_MEM_FENCE
 #define WORK_GROUP_SIZE 1024
 
+// Processing steps
 void sort_rids_by_value(global uint* input, global  uint* rids,
                         size_t idx, size_t total);
 void produce_chunck_id_literals(global uint* rids, global uint* chids,
                                 global uint* lits, size_t idx, size_t total);
 size_t merged_lit_by_val_chids(global uint* input, global uint* chids,
                                global uint* lits, size_t idx, size_t total);
-
+void produce_fills(global uint* input, global uint* chids,
+                   size_t idx, size_t total);
+size_t fuse_fill_literals(global uint* chids, global uint* lits,
+                          global uint* index, size_t idx, size_t k);
+// helper functions
 void parallel_selection_sort(global uint* key, global uint* data,
                              size_t idx, size_t total);
 size_t reduce_by_key_OR(local ulong* keys, global uint* lits,
                         size_t idx, size_t total);
 
+// main kernel
 kernel void kernel_wah_index(global uint* input,
                              global uint* config,
                              global uint* index,
@@ -35,6 +41,16 @@ kernel void kernel_wah_index(global uint* input,
     index[idx] = WORK_GROUP_SIZE;
     return;
   }
+  // CONSIDERATIONS:
+  // * some scaling state of the are functions required
+  //  - sorting
+  //  - scan
+  //  - stream compaction
+  //  - reduce by key
+  // * when do we need barriers?
+  //  - at the end of functions, before return?
+  //  - can be just assign return values to global stuff
+  //  - ...
 
   // read config data
   // assumed to be == total, except idx, which is == 2 x total
@@ -62,11 +78,10 @@ kernel void kernel_wah_index(global uint* input,
   config[3] = (uint) k;
   config[5] = (uint) k;
   */
-  produce_fills(input, chids, k);
+  produce_fills(input, chids, idx, k);
   barrier(FENCE_TYPE);
+  config[4] = fuse_fill_literals(chids, lits, index, idx, k);
 /*
-  vector<uint> index(2 * k);
-  auto idx_length = fuse_fill_literals(chids, lits, index, k);
   vector<uint> offsets(k);
   auto keycnt = compute_colum_length(input, chids, offsets, k);
 */
@@ -100,6 +115,66 @@ size_t merged_lit_by_val_chids(global uint* input, global uint* chids,
   return k;
 }
 
+void produce_fills(global uint* input, global uint* chids,
+                   size_t idx, size_t total) {
+  /*
+  local ulong keys[WORK_GROUP_SIZE];
+  keys[idx] = (((ulong) chids[idx]) << 32) | input[idx];
+  barrier(FENCE_TYPE);
+  local uint heads[WORK_GROUP_SIZE];
+  heads[idx] = idx == 0 ? 1 : (keys[idx] - keys[idx - 1]);
+  if (heads[idx] == 0) {
+  */
+  if (idx != 0 && (input[idx] == input[idx - 1] &&
+                   chids[idx] == chids[idx - 1])) {
+    chids[idx] = chids[idx] - chids[idx - 1] - 1;
+  } else {
+    if (chids[idx] != 0) {
+      chids[idx] = chids[idx] - 1;
+    }
+  }
+}
+
+size_t fuse_fill_literals(global uint* chids, global uint* lits,
+                          global uint* index, size_t idx, size_t total) {
+  local ulong markers[WORK_GROUP_SIZE * 2];
+  local ulong position[WORK_GROUP_SIZE * 2];
+  volatile local int len;
+  uint a = 2 * idx;
+  uint b = 2 * idx + 1;
+  // stream compaction
+  if (idx < total) {
+    index[a] = chids[idx];
+    index[b] = lits[idx];
+    barrier(FENCE_TYPE);
+    markers[a] = index[a] == 0 ? 0 : 1;
+    markers[b] = index[b] == 0 ? 0 : 1;
+    barrier(FENCE_TYPE);
+    // should be a parallel scan
+    if (idx == 0) {
+      position[0] = 0;
+      for (uint i = 1; i < 2 * total; ++i) {
+        position[i] = position[i - 1] + markers[i - 1];
+      }
+    }
+    uint tmp_a = index[a];
+    uint tmp_b = index[b];
+    barrier(FENCE_TYPE);
+    if (markers[a] == 1) {
+      index[position[a]] = tmp_a;
+      atomic_add(&len, 1);
+    }
+    if (markers[b] == 1) {
+      index[position[b]] = tmp_b;
+      atomic_add(&len, 1);
+    }
+  }
+  barrier(FENCE_TYPE); // <-- should there be a barrier here?
+  return len;
+}
+
+
+// Helper implementations
 
 size_t reduce_by_key_OR(local ulong* keys, global uint* lits,
                         size_t idx, size_t total) {
