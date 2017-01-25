@@ -15,6 +15,8 @@ $ ./configure [--with-caf=CAF_BUILD_DIR]
 $ make
 ```
 
+*Note:* `gpu` program currently configured to load cl file from include directory, execute from project root using `./build/bin/gpu`. Number of indexed values should fit into a working group (simple algorithms currently imposed that limit), the gpu main file uses the value `amount` to determin how many values are created. (Still needs a lot of work).
+
 ## Requirements
 
 * CAF build with the OpenCL submodule
