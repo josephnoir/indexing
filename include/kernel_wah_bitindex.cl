@@ -25,14 +25,14 @@ size_t compute_colum_length(global uint* input, global uint* chids,
 // helper functions
 void parallel_selection_sort(global uint* key, global uint* data,
                              size_t idx, size_t total);
-size_t reduce_by_key_OR(local ulong* keys, global uint* lits,
-                        size_t idx, size_t total);
-size_t reduce_by_key_SUM(global uint* input, local uint* tmp,
+size_t reduce_by_key_OR(global uint* keys_high, global uint* keys_low,
+                        global uint* data, size_t idx, size_t total);
+size_t reduce_by_key_SUM(global uint* keys, local uint* data,
                          size_t idx, size_t total);
 
 // main kernel
-kernel void kernel_wah_index(global uint* input,
-                             global uint* config,
+kernel void kernel_wah_index(global uint* config,
+                             global uint* input,
                              global uint* index,
                              global uint* offsets,
                              global uint* rids,
@@ -69,25 +69,35 @@ kernel void kernel_wah_index(global uint* input,
   //__gloabl uint[index_size] rids;
   sort_rids_by_value(input, rids, idx, total);
   barrier(FENCE_TYPE);
-  //index[idx] = input[idx];
-  //offsets[idx] = rids[idx];
+  //index[idx] = rids[idx];
+  //offsets[idx] = 0;
+  //config[4] = total;
   produce_chunck_id_literals(rids, chids, lits, idx, total);
   barrier(FENCE_TYPE);
-  //index[idx] = rids[idx];
+  //input[idx] = rids[idx];
+  //index[idx] = chids[idx];
   //offsets[idx] = lits[idx];
+  //config[4] = total;
   size_t k = merged_lit_by_val_chids(input, chids, lits, idx, total);
   barrier(FENCE_TYPE);
-  /*
-  index[idx] = input[idx];
-  offsets[idx] = lits[idx];
-  config[3] = (uint) k;
-  config[5] = (uint) k;
-  */
+  //index[idx] = chids[idx];
+  //offsets[idx] = lits[idx];
+  //config[3] = (uint) k;
+  //config[4] = (uint) k;
+  //config[5] = (uint) k;
   produce_fills(input, chids, idx, k);
   barrier(FENCE_TYPE);
-  config[4] = fuse_fill_literals(chids, lits, index, idx, k);
+  //config[4] = k;
+  //index[idx] = chids[idx];
+  //offsets[idx] = lits[idx];
+  uint idxlen = fuse_fill_literals(chids, lits, index, idx, k);
+  barrier(FENCE_TYPE);
+  config[4] = idxlen;
+/*
   uint keycnt = compute_colum_length(input, chids, offsets, idx, k);
-  (void) keycnt;
+  barrier(FENCE_TYPE);
+  config[0] = keycnt;
+*/
 }
 
 void sort_rids_by_value(global uint* input,global uint* rids,
@@ -108,26 +118,14 @@ void produce_chunck_id_literals(global uint* rids, global uint* chids,
 
 size_t merged_lit_by_val_chids(global uint* input, global uint* chids,
                                global uint* lits, size_t idx, size_t total) {
-  local ulong keys[WORK_GROUP_SIZE];
-  keys[idx] = (((ulong) chids[idx]) << 32) | input[idx];
-  barrier(FENCE_TYPE);
-  size_t k = reduce_by_key_OR(keys, lits, idx, total);
-  barrier(FENCE_TYPE);
-  chids[idx] = (uint) (keys[idx] >> 32);
-  input[idx] = (uint) keys[idx];
+  // avoid merge of chids and input into keys,
+  // simply pass them both
+  size_t k = reduce_by_key_OR(chids, input, lits, idx, total);
   return k;
 }
 
 void produce_fills(global uint* input, global uint* chids,
                    size_t idx, size_t total) {
-  /*
-  local ulong keys[WORK_GROUP_SIZE];
-  keys[idx] = (((ulong) chids[idx]) << 32) | input[idx];
-  barrier(FENCE_TYPE);
-  local uint heads[WORK_GROUP_SIZE];
-  heads[idx] = idx == 0 ? 1 : (keys[idx] - keys[idx - 1]);
-  if (heads[idx] == 0) {
-  */
   if (idx != 0 && (input[idx] == input[idx - 1] &&
                    chids[idx] == chids[idx - 1])) {
     chids[idx] = chids[idx] - chids[idx - 1] - 1;
@@ -140,18 +138,19 @@ void produce_fills(global uint* input, global uint* chids,
 
 size_t fuse_fill_literals(global uint* chids, global uint* lits,
                           global uint* index, size_t idx, size_t total) {
-  local ulong markers[WORK_GROUP_SIZE * 2];
-  local ulong position[WORK_GROUP_SIZE * 2];
+  local uint markers [WORK_GROUP_SIZE * 2];
+  local uint position[WORK_GROUP_SIZE * 2];
   volatile local int len;
-  uint a = 2 * idx;
-  uint b = 2 * idx + 1;
-  // stream compaction
+  //uint a =  2 * idx;
+  //uint b = (2 * idx) + 1;
+  len = 0;
   if (idx < total) {
-    index[a] = chids[idx];
-    index[b] = lits[idx];
+    index[ 2 * idx     ] = chids[idx];
+    index[(2 * idx) + 1] = lits[idx];
     barrier(FENCE_TYPE);
-    markers[a] = index[a] == 0 ? 0 : 1;
-    markers[b] = index[b] == 0 ? 0 : 1;
+    // stream compaction
+    markers[ 2 * idx     ] = index[ 2 * idx     ] != 0; // ? 1 : 0;
+    markers[(2 * idx) + 1] = index[(2 * idx) + 1] != 0; // ? 1 : 0;
     barrier(FENCE_TYPE);
     // should be a parallel scan
     if (idx == 0) {
@@ -160,15 +159,15 @@ size_t fuse_fill_literals(global uint* chids, global uint* lits,
         position[i] = position[i - 1] + markers[i - 1];
       }
     }
-    uint tmp_a = index[a];
-    uint tmp_b = index[b];
+    uint tmp_a = index[2 * idx];
+    uint tmp_b = index[(2 * idx) + 1];
     barrier(FENCE_TYPE);
-    if (markers[a] == 1) {
-      index[position[a]] = tmp_a;
+    if (markers[2 * idx] == 1) {
+      index[position[2 * idx]] = tmp_a;
       atomic_add(&len, 1);
     }
-    if (markers[b] == 1) {
-      index[position[b]] = tmp_b;
+    if (markers[(2 * idx) + 1] == 1) {
+      index[position[(2 * idx) + 1]] = tmp_b;
       atomic_add(&len, 1);
     }
   }
@@ -181,15 +180,67 @@ size_t compute_colum_length(global uint* input, global uint* chids,
   local uint tmp[WORK_GROUP_SIZE];
   tmp[idx] = 1 + (chids[idx] == 0 ? 0 : 1);
   uint keycnt = reduce_by_key_SUM(input, tmp, idx, k);
-  // inclusive scan to create offsets
+  // inclusive scan to create offsets, should be parallel
+  barrier(FENCE_TYPE);
+  if (idx == 0) {
+    offsets[0] = 0;
+    for (uint i = 1; i < keycnt; ++i) {
+      offsets[i] = offsets[i - 1] + tmp[i - 1];
+    }
+  }
   return keycnt;
 }
 
-// Helper implementations
+// Helper functions
 
+// we have 64 bit keys consisting of (high << 32 | low), but want to 
+// avoid the extra copy, so ...
+size_t reduce_by_key_OR(global uint* keys_high, global uint* keys_low,
+                        global uint* data, size_t idx, size_t total) {
+  local uint heads[WORK_GROUP_SIZE];
+  volatile local int k;
+  /*
+  heads[idx] = (idx == 0) ||
+               (keys_high[idx] != keys_high[idx - 1]) ||
+               (keys_low [idx] != keys_low [idx - 1]);
+  */
+  for (uint i = 1; i < total; ++i) {
+    if (keys_high[i] != keys_high[i - 1] ||
+        keys_low [i] != keys_low [i - 1]) {
+      heads[i] = 1;
+    }
+  }
+  heads[0] = 1;
+  barrier(FENCE_TYPE);
+  if (heads[idx] != 0) {
+    uint val = data[idx];
+    uint curr = idx + 1;
+    while (heads[curr] == 0 && curr < total) {
+      val |= data[curr]; // OR operation
+      curr += 1;
+    }
+    atomic_add(&k, 1);
+    data[idx] = val;
+  }
+  barrier(FENCE_TYPE);
+  if (idx == 0) {
+    uint pos = 0;
+    for (uint i = 0; i < total; ++i) {
+      if (heads[i] != 0) {
+        keys_high[pos] = keys_high[i];
+        keys_low[pos] = keys_low[i];
+        data[pos] = data[i];
+        pos += 1;
+      }
+    }
+  }
+  return (uint) k;
+}
+
+/*
 size_t reduce_by_key_OR(local ulong* keys, global uint* lits,
                         size_t idx, size_t total) {
-  local uint heads[WORK_GROUP_SIZE];
+  local ulong heads[WORK_GROUP_SIZE];
   heads[idx] = idx == 0 ? 1 : (keys[idx] - keys[idx - 1]);
   volatile local int k;
   if (heads[idx] != 0) {
@@ -215,10 +266,35 @@ size_t reduce_by_key_OR(local ulong* keys, global uint* lits,
   }
   return (uint) k;
 }
+*/
 
-size_t reduce_by_key_SUM(global uint* input, local uint* tmp,
+size_t reduce_by_key_SUM(global uint* keys, local uint* data,
                          size_t idx, size_t total) {
-  return total;
+  local uint heads[WORK_GROUP_SIZE];
+  heads[idx] = idx == 0 ? 1 : (keys[idx] - keys[idx - 1]);
+  volatile local int k;
+  if (heads[idx] != 0) {
+    uint val = data[idx];
+    uint curr = idx + 1;
+    while (heads[curr] == 0 && curr < total) {
+      val += data[curr]; // SUM operation
+      curr += 1;
+    }
+    atomic_add(&k, 1);
+    data[idx] = val;
+  }
+  barrier(FENCE_TYPE);
+  if (idx == 0) {
+    uint pos = 0;
+    for (uint i = 0; i < total; ++i) {
+      if (heads[i] != 0) {
+        keys[pos] = keys[i];
+        data[pos] = data[i];
+        pos += 1;
+      }
+    }
+  }
+  return (uint) k;
 }
 
 /**
@@ -254,7 +330,6 @@ size_t reduce_by_key_SUM(global uint* input, local uint* tmp,
  *
  **/
 
-// One thread per record
 void parallel_selection_sort(global uint* key, global uint* data,
                              size_t idx, size_t total) {
   uint key_value = key[idx];
