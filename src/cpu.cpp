@@ -254,19 +254,21 @@ size_t compute_colum_length(vector<uint32_t>& input,
 } // namespace <anonymous>
 
 int main() {
-  //vector<uint32_t> values{10,  7, 22,  6,  7,
-  //                         1,  9, 42,  2,  5,
-  //                        13,  3,  2,  1,  0,
-  //                         1, 18, 18,  3, 13};
 
-  auto amount = 100;
+  vector<uint32_t> values{10,  7, 22,  6,  7,
+                           1,  9, 42,  2,  5,
+                          13,  3,  2,  1,  0,
+                           1, 18, 18,  3, 13};
+  auto amount = values.size();
+/*
+  auto amount = 1024*14;
   std::mt19937 rng;
   rng.seed(std::random_device()());
-  std::uniform_int_distribution<uint32_t> dist(0,10);
+  std::uniform_int_distribution<uint32_t> dist(0,9);
   vector<uint32_t> values(amount);
   for (int i = 0; i < amount; ++i)
     values[i] = dist(rng);
-
+*/
   auto input = values;
   vector<uint32_t> rids(input.size());
   vector<uint32_t> chids(input.size());
@@ -277,19 +279,20 @@ int main() {
   auto k = merged_lit_by_val_chids(input, chids, lits);
   produce_fills(input, chids, k);
   vector<uint32_t> index(2 * k);
-  auto idx_length = fuse_fill_literals(chids, lits, index, k);
+  auto index_length = fuse_fill_literals(chids, lits, index, k);
   vector<uint32_t> offsets(k);
   auto keycnt = compute_colum_length(input, chids, offsets, k);
 
   cout << "Created index for " << amount
-       << " values, with " << idx_length
-       << " entries" << endl;
+       << " values, with " << index_length
+       << " blocks and " << keycnt
+       << " keys." << endl;
 
   // Searching for some sensible output format
   for (size_t i = 0; i < keycnt; ++i) {
     auto value = input[i];
     auto offset = offsets[i];
-    auto length = (i == keycnt - 1) ? index.size() - offsets[i]
+    auto length = (i == keycnt - 1) ? index_length - offsets[i]
                                     : offsets[i + 1] - offsets[i];
     cout << "Index for value " << value << ":" << endl
          << "> length " << length << endl << "> offset " << offset << endl;
