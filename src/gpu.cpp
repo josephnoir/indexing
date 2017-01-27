@@ -99,48 +99,43 @@ void indexer(event_based_actor* self,
   self->request(worker, chrono::seconds(30), move(config), move(input)).then(
     [amount](const vector<uint32_t>& config, const vector<uint32_t>& input,
              const vector<uint32_t>& index, const vector<uint32_t>& offsets) {
-      static_cast<void>(input);
-      static_cast<void>(index);
-      static_cast<void>(offsets);
-cout << "conf: " << config.size() << endl
-     << "inpt: " << input.size() << endl
-     << "indx: " << index.size() << endl
-     << "offs: " << offsets.size() << endl;
+/*
+    cout << "conf: " << config.size() << endl
+         << "inpt: " << input.size() << endl
+         << "indx: " << index.size() << endl
+         << "offs: " << offsets.size() << endl;
 
-      auto length = config[4];
-      cout << "index length = " << length << endl;
-      for (uint32_t i = 0; i < length; ++i) {
-        //cout << as_binary(input[i]) << endl;
-        cout << as_binary(input[i]) << " :: "
-             << as_binary(index[i]) << " :: "
-             << as_binary(offsets[i]) << endl;
-      }
+    auto length = config[4];
+    cout << "index length = " << length << endl;
+    for (uint32_t i = 0; i < length; ++i) {
+      //cout << as_binary(input[i]) << endl;
+      cout << as_binary(input[i]) << " :: "
+           << as_binary(index[i]) << " :: "
+           << as_binary(offsets[i]) << endl;
+    }
+*/
 
-
-      auto index_length = config[4];
-      auto keycnt = config[0];
-      cout << "Created index for " << amount
-           << " values, with " << index_length
-           << " blocks and " << keycnt
+    auto index_length = config[4];
+    auto keycnt = config[0];
+    cout << "Created index for " << amount
+         << " values, with " << index_length
+         << " blocks and " << keycnt
            << " keys." << endl;
 
-/*
-      // Searching for some sensible output format
-      for (size_t i = 0; i < keycnt; ++i) {
-        auto value = input[i];
-        auto offset = offsets[i];
-        auto length = (i == keycnt - 1) ? index_length - offsets[i]
-                                          : offsets[i + 1] - offsets[i];
-        cout << "Index for value " << value << ":" << endl
-             << "> length " << length << endl << "> offset " << offset << endl;
-        for (size_t j = 0; j < length; ++j) {
-          cout << as_binary(index[offset + j]) << " ";
-        }
-        cout << endl << endl;
+    // Searching for some sensible output format
+    for (size_t i = 0; i < keycnt; ++i) {
+      auto value = input[i];
+      auto offset = offsets[i];
+      auto length = (i == keycnt - 1) ? index_length - offsets[i]
+                                        : offsets[i + 1] - offsets[i];
+      cout << "Index for value " << value << ":" << endl
+           << "> length " << length << endl << "> offset " << offset << endl;
+      for (size_t j = 0; j < length; ++j) {
+        cout << as_binary(index[offset + j]) << " ";
       }
-*/
+      cout << endl << endl;
     }
-  );
+  });
 }
 
 } // namespace <anonymous>

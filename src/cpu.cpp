@@ -283,6 +283,16 @@ int main() {
   vector<uint32_t> offsets(k);
   auto keycnt = compute_colum_length(input, chids, offsets, k);
 
+/*
+  cout << "index length = " << index_length << endl;
+  for (uint32_t i = 0; i < index_length; ++i) {
+    //cout << as_binary(input[i]) << endl;
+    cout << as_binary(input[i]) << " :: "
+         << as_binary(index[i]) << " :: "
+         << as_binary(offsets[i]) << endl;
+  }
+*/
+
   cout << "Created index for " << amount
        << " values, with " << index_length
        << " blocks and " << keycnt
