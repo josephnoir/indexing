@@ -47,6 +47,7 @@ Usage: $0 [OPTION]... [VAR=VALUE]...
 
   Required packages in non-standard locations:
     --with-caf=PATH             path to CAF install root or build directory
+    --with-vast=PATH            path to VAST install root or build directory
 
   Influential Environment Variables (only on first invocation):
     CXX                         C++ compiler command
@@ -236,6 +237,9 @@ while [ $# -ne 0 ]; do
             ;;
         --with-caf=*)
             append_cache_entry CAF_ROOT_DIR PATH "$optarg"
+            ;;
+        --with-vast=*)
+            append_cache_entry VAST_ROOT_DIR PATH "$optarg"
             ;;
         --no-summary)
             append_cache_entry CAF_NO_SUMMARY BOOL yes

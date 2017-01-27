@@ -38,6 +38,13 @@ else ()
   message(FATAL_ERROR "Could not find CAF")
 endif ()
 
+find_package(VAST)
+if (VAST_FOUND)
+  include_directories(${VAST_INCLUDE_DIRS})
+else ()
+  message(FATAL_ERROR "Could not find VAST")
+endif ()
+
 find_package(OpenCL REQUIRED)
 
 include_directories(. include)
@@ -48,9 +55,15 @@ set(SOURCES_CPU
 set(SOURCES_GPU
   src/gpu.cpp
 )
+set(SOURCES_VAST
+  src/vst.cpp
+)
 file(GLOB_RECURSE HEADERS "include/*.hpp" "include/*.cl")
 
-add_executable(cpu ${SOURCES_CPU} ${HEADERS})
+add_executable(cpu
+  ${SOURCES_CPU}
+  ${HEADERS}
+)
 target_link_libraries(cpu
   ${CMAKE_DL_LIBS}
   ${CAF_LIBRARY_CORE}
@@ -63,11 +76,22 @@ add_executable(gpu
   ${OpenCL_INCLUDE_DIRS}
   ${CAF_INCLUDE_DIR_OPENCL}
 )
-
 target_link_libraries(gpu
   ${CMAKE_DL_LIBS}
   ${CAF_LIBRARY_CORE}
   ${CAF_LIBRARY_IO}
   ${CAF_LIBRARY_OPENCL}
   ${OpenCL_LIBRARIES}
+)
+
+add_executable(vst
+  ${SOURCES_VAST}
+  ${HEADERS}
+  ${VAST_INCLUDE_DIR}
+)
+target_link_libraries(vst
+  ${CMAKE_DL_LIBS}
+  ${CAF_LIBRARY_CORE}
+  ${CAF_LIBRARY_IO}
+  ${VAST_LIBRARY}
 )
