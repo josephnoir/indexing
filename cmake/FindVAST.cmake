@@ -20,7 +20,8 @@
 
 set(header_hints
     "${VAST_ROOT_DIR}/include"
-    "${VAST_ROOT_DIR}/../libvast")
+    "${VAST_ROOT_DIR}/../libvast"
+    "${VAST_ROOT_DIR}/libvast")
 find_path(VAST_INCLUDE_DIR
           NAMES
             "vast/bitmap_index.hpp"
@@ -31,7 +32,20 @@ find_path(VAST_INCLUDE_DIR
             /opt/local/include
             /sw/include
             ${CMAKE_INSTALL_PREFIX}/include)
+find_path(VAST_INCLUDE_CONF_DIR
+          NAMES
+            "vast/config.hpp"
+          HINTS
+            ${header_hints}
+            /usr/include
+            /usr/local/include
+            /opt/local/include
+            /sw/include
+            ${CMAKE_INSTALL_PREFIX}/include)
 mark_as_advanced(VAST_INCLUDE_DIR)
+mark_as_advanced(VAST_INCLUDE_CONF_DIR)
+set(VAST_INCLUDE_DIRS ${VAST_INCLUDE_DIRS} ${VAST_INCLUDE_DIR})
+set(VAST_INCLUDE_DIRS ${VAST_INCLUDE_DIRS} ${VAST_INCLUDE_CONF_DIR})
 if (NOT "${VAST_INCLUDE_DIR}" STREQUAL "VAST_INCLUDE_DIR-NOTFOUND")
   # mark as found (set back to false in case library cannot be found)
   set(VAST_FOUND true)

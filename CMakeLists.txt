@@ -19,7 +19,7 @@ endif ()
 if (CMAKE_CXX_FLAGS)
   set(CXXFLAGS_PROVIDED true)
 else()
-  set(CMAKE_CXX_FLAGS "-std=c++11 -Wextra -Wall -pedantic -O3")
+  set(CMAKE_CXX_FLAGS "-std=c++14 -Wextra -Wall -pedantic -O3")
 endif ()
 
 # set build type (evaluate ENABLE_DEBUG flag)
