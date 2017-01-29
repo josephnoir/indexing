@@ -39,23 +39,20 @@ string as_binary(T num) {
 void indexer(event_based_actor* self,
              const string& kernel,
              const string& func) {
+  /*
   vector<uint32_t> values{10,  7, 22,  6,  7,
                            1,  9, 42,  2,  5,
                           13,  3,  2,  1,  0,
                            1, 18, 18,  3, 13};
   auto amount = values.size();
-  /*
-  size_t amount = 10;
+  */
+  size_t amount = 1024;
   std::mt19937 rng;
   rng.seed(std::random_device()());
-  std::uniform_int_distribution<uint32_t> dist(0,10);
+  std::uniform_int_distribution<uint32_t> dist(0,31);
   vector<uint32_t> values(amount);
   for (size_t i = 0; i < amount; ++i)
     values[i] = dist(rng);
-  */
-  for (auto& val : values)
-    cout << val << " ";
-  cout << endl;
 
   vector<uint32_t> input = values;
   vector<uint32_t> index(amount * 2);

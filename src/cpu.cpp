@@ -26,36 +26,6 @@ string as_binary(T num) {
 }
 
 // Reduce by key for OR operation
-/*
-template<class Key, class Lit>
-size_t reduce_by_key(vector<Key>& keys, vector<Lit>& lits) {
-  vector<Key> new_keys;
-  vector<Lit> new_lits;
-  size_t from = 0;
-  while (from < keys.size()) {
-    new_keys.push_back(keys[from]);
-    auto to = from;
-    while (to < keys.size() && keys[to] == keys[from])
-      ++to;
-    cout << "Bounds: " << from << " - " << to << endl;
-    for (size_t i = from; i < to; ++i) {
-      cout << as_binary(keys[i]) << " --> " << as_binary(lits[i]) << endl;
-    }
-    Lit merged_lit = 0;
-    while (from < to) {
-      merged_lit |= lits[from];
-      ++from;
-    }
-    new_lits.push_back(merged_lit);
-  }
-  lits.clear();
-  keys.clear();
-  lits = move(new_lits);
-  keys = move(new_keys);
-  assert(keys.size() == lits.size());
-  return lits.size();
-}
-*/
 
 template<class T>
 size_t reduce_by_key(vector<T>& input, vector<T>& chids, vector<T>& lits) {
@@ -254,21 +224,21 @@ size_t compute_colum_length(vector<uint32_t>& input,
 } // namespace <anonymous>
 
 int main() {
-
+  /*
   vector<uint32_t> values{10,  7, 22,  6,  7,
                            1,  9, 42,  2,  5,
                           13,  3,  2,  1,  0,
                            1, 18, 18,  3, 13};
   auto amount = values.size();
-/*
-  auto amount = 1024*14;
+  */
+  auto amount = 1024;
   std::mt19937 rng;
   rng.seed(std::random_device()());
-  std::uniform_int_distribution<uint32_t> dist(0,9);
+  std::uniform_int_distribution<uint32_t> dist(0,1023);
   vector<uint32_t> values(amount);
   for (int i = 0; i < amount; ++i)
     values[i] = dist(rng);
-*/
+
   auto input = values;
   vector<uint32_t> rids(input.size());
   vector<uint32_t> chids(input.size());
