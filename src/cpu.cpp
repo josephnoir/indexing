@@ -17,10 +17,16 @@ template<class T>
 string as_binary(T num) {
   stringstream s;
   auto num_bits = (sizeof(T) * 8);
+  auto added_bits = 0;
   T mask = T(0x1) << (num_bits - 1);
   while (mask > 0) {
+    if (added_bits == 32) {
+      s << " ";
+      added_bits = 0;
+    }
     s << ((num & mask) ? "1" : "0");
     mask >>= 1;
+    ++added_bits;
   }
   return s.str();
 }
@@ -228,15 +234,19 @@ int main() {
   vector<uint32_t> values{10,  7, 22,  6,  7,
                            1,  9, 42,  2,  5,
                           13,  3,  2,  1,  0,
-                           1, 18, 18,  3, 13};
+                           1, 18, 18,  3, 13,
+                           5,  9,  0,  3,  2,
+                          19,  5, 23, 22, 10,
+                           6, 22};
   auto amount = values.size();
   */
-  auto amount = 1024;
+  size_t max_value = 32;
+  size_t amount = 1024;
   std::mt19937 rng;
   rng.seed(std::random_device()());
-  std::uniform_int_distribution<uint32_t> dist(0,1023);
+  std::uniform_int_distribution<uint32_t> dist(0,max_value - 1);
   vector<uint32_t> values(amount);
-  for (int i = 0; i < amount; ++i)
+  for (size_t i = 0; i < amount; ++i)
     values[i] = dist(rng);
 
   auto input = values;
@@ -288,4 +298,3 @@ int main() {
   }
   */
 }
-
