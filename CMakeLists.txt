@@ -58,6 +58,9 @@ set(SOURCES_GPU
 set(SOURCES_VAST
   src/vst.cpp
 )
+set(SOURCE_GENERATOR
+  src/generate_test_data.cpp
+)
 file(GLOB_RECURSE HEADERS "include/*.hpp" "include/*.cl")
 
 add_executable(cpu
@@ -94,4 +97,13 @@ target_link_libraries(vst
   ${CAF_LIBRARY_CORE}
   ${CAF_LIBRARY_IO}
   ${VAST_LIBRARY}
+)
+
+add_executable(generator
+  ${SOURCE_GENERATOR}
+  ${HEADERS}
+)
+target_link_libraries(generator
+  ${CMAKE_DL_LIBS}
+  ${CAF_LIBRARY_CORE}
 )
