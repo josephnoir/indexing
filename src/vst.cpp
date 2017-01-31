@@ -30,8 +30,8 @@ public:
   uint32_t bound = 0;
   config() {
     opt_group{custom_options_, "global"}
-    .add(filename, "data-file,f", "File to read test data from (one value per line)")
-    .add(bound, "bound,b", "maximum value in the set (0 will scan values)");
+    .add(filename, "data-file,f", "File with test data (one value per line)")
+    .add(bound, "bound,b", "maximum value (0 will scan values)");
   }
 };
 
@@ -76,7 +76,7 @@ void caf_main(actor_system&, const config& cfg) {
   auto& storage = coder.storage();
   for (auto& key : keys)
     cout << "Index for value " << key << ":" << endl
-         << to_string(storage[key]) << endl;
+         << to_string(storage.at(key)) << endl;
 }
 
 CAF_MAIN()
