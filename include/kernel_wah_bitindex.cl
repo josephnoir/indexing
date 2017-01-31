@@ -58,13 +58,12 @@ kernel void kernel_wah_index(global uint* config,
   //  - ...
 
   // read config data
-  // assumed to be == total, except idx, which is == 2 x total
-  //uint input_size   = config[0];
-  //uint rids_size    = config[1];
-  //uint chids_size   = config[2];
-  //uint lits_size    = config[3];
-  //uint index_size   = config[4];
-  //uint offsets_size = config[5];
+  // uint input_size       = config[0];
+  // uint index_size       = config[1]; should be 2* input size
+  // uint processed_ values = config[2];
+
+  // Currently 1 work item per value
+  total = config[0];
 
   //__gloabl uint[index_size] rids;
   sort_rids_by_value(input, rids, idx, total);
@@ -92,7 +91,7 @@ kernel void kernel_wah_index(global uint* config,
   //offsets[idx] = lits[idx];
   uint idxlen = fuse_fill_literals(chids, lits, index, idx, k);
   barrier(FENCE_TYPE);
-  config[4] = idxlen;
+  config[1] = idxlen;
   uint keycnt = compute_colum_length(input, chids, offsets, idx, k);
   barrier(FENCE_TYPE);
   config[0] = keycnt;
