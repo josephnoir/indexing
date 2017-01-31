@@ -1,5 +1,6 @@
 
 #include <cmath>
+#include <chrono>
 #include <random>
 #include <vector>
 #include <cassert>
@@ -16,6 +17,7 @@
 #include "caf/opencl/all.hpp"
 
 using namespace std;
+using namespace std::chrono;
 using namespace caf;
 using namespace caf::opencl;
 
@@ -55,19 +57,24 @@ struct indexer_state {
   uint32_t in_progress;
   uint32_t concurrently;
   uint32_t batch_size;
+  bool print_results;
+  high_resolution_clock::time_point start;
 };
 
 behavior indexer(stateful_actor<indexer_state>* self) {
   return {
     [=] (init_atom, actor gpu_indexer, vector<uint32_t> input,
-         uint32_t batch_size, uint32_t concurrently) {
+         uint32_t batch_size, uint32_t concurrently,
+         bool print_results) {
       self->state.idx_worker = gpu_indexer;
       self->state.input = std::move(input);
       self->state.values_left = input.size();
       self->state.in_progress = 0;
       self->state.concurrently = concurrently;
       self->state.batch_size = batch_size;
+      self->state.print_results = print_results;
       // MEASURE: start
+      self->state.start = high_resolution_clock::now();
     },
     [=] (index_atom) {
       auto& s = self->state;
@@ -119,33 +126,38 @@ behavior indexer(stateful_actor<indexer_state>* self) {
              << as_binary(offsets[i]) << endl;
       }
   */
-
-      auto keycnt = config[0];
-      auto index_length = config[1];
       auto processed = config[2];
-      cout << "Created index for " << self->state.batch_size
-           << " values, with "     << index_length
-           << " blocks and "       << keycnt
-           << " keys."             << endl;
 
-      // Searching for some sensible output format
-      for (size_t i = 0; i < keycnt; ++i) {
-        auto value = input[i];
-        auto offset = offsets[i];
-        auto length = (i == keycnt - 1) ? index_length - offsets[i]
-                                        : offsets[i + 1] - offsets[i];
-        cout << "Index for value " << value << " has '" << length
-             << "' blocks at offset '" << offset << "':" << endl;
-        for (size_t j = 0; j < length; ++j) {
-          cout << as_binary(index[offset + j]) << " ";
-        }
-        cout << endl << endl;
-      }
       self->state.values_left -= processed;
       if (self->state.values_left > 0) {
+        auto stop = chrono::high_resolution_clock::now();
+        cout << "Time: '"
+             << duration_cast<milliseconds>(stop - self->state.start).count()
+             << "' ms" << endl;
         self->quit();
       } else {
         self->send(self, index_atom::value);
+      }
+      if (self->state.print_results) {
+        auto keycnt = config[0];
+        auto index_length = config[1];
+        cout << "Created index for " << self->state.batch_size
+             << " values, with "     << index_length
+             << " blocks and "       << keycnt
+             << " keys."             << endl;
+        // Searching for some sensible output format
+        for (size_t i = 0; i < keycnt; ++i) {
+          auto value = input[i];
+          auto offset = offsets[i];
+          auto length = (i == keycnt - 1) ? index_length - offsets[i]
+                                          : offsets[i + 1] - offsets[i];
+          cout << "Index for value " << value << " has '" << length
+               << "' blocks at offset '" << offset << "':" << endl;
+          for (size_t j = 0; j < length; ++j) {
+            cout << as_binary(index[offset + j]) << " ";
+          }
+          cout << endl << endl;
+        }
       }
     }
   };
@@ -160,15 +172,17 @@ public:
   string device_name = "GeForce GT 650M";
   uint32_t batch_size = 1024;
   uint32_t concurrently = 0;
+  bool print_results;
   config() {
     load<opencl::manager>();
     add_message_type<vector<uint32_t>>("data_vector");
     opt_group{custom_options_, "global"}
-    .add(filename, "data-file,f", "File with test data (one value per line)")
-    .add(bound, "bound,b", "maximum value in the set (0 will scan values)")
-    .add(device_name, "device,d", "Device for computation (GeForce GT 650M)")
-    .add(batch_size, "batch-size,b", "Values indexed in one batch (1024)")
-    .add(concurrently, "concurrently,c", "Concurrent batches sent to GPU "
+    .add(filename, "data-file,f", "file with test data (one value per line)")
+    .add(bound, "bound,b", "maximum value (0 will scan values)")
+    .add(device_name, "device,d", "device for computation (GeForce GT 650M)")
+    .add(batch_size, "batch-size,b", "values indexed in one batch (1024)")
+    .add(print_results, "print,p", "print resulting bitmap index")
+    .add(concurrently, "concurrently,c", "concurrent batches sent to GPU "
                                          "(available compute units)");
   }
 };
@@ -249,7 +263,7 @@ void caf_main(actor_system& system, const config& cfg) {
   );
   auto idx_manger = system.spawn(indexer);
   anon_send(idx_manger, init_atom::value, worker, values, batch_size,
-            concurrently);
+            concurrently, cfg.print_results);
   anon_send(idx_manger, index_atom::value);
   system.await_all_actors_done();
 }

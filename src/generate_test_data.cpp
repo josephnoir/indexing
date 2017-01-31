@@ -9,16 +9,16 @@ using namespace caf;
 
 class config : public actor_system_config {
 public:
-  size_t from   =      0;
-  size_t to     =   1023;
-  size_t amount = 250000;
-  string separator = "\n";
+  size_t from   =         0;
+  size_t to     =      1023;
+  size_t amount = 268500000;
+  string separator =   "\n";
 
   config() {
     opt_group{custom_options_, "global"}
     .add(from, "from,f", "set minimum value (default: 0)")
     .add(to,   "to,t", "set maximum value (default: 1023)")
-    .add(amount, "amount,a", "set number of values (default: 250000)")
+    .add(amount, "amount,a", "set number of values (default: 268 500 000)")
     .add(separator, "separator,s", "separator between numbers (default: \\n)");
   }
 };

@@ -1,5 +1,6 @@
 
 #include <cmath>
+#include <chrono>
 #include <random>
 #include <vector>
 #include <cassert>
@@ -17,10 +18,12 @@
 #include "vast/wah_bitmap.hpp"
 #include "vast/bitmap_index.hpp"
 
+#include "vast/concept/printable/stream.hpp"
 #include "vast/concept/printable/to_string.hpp"
 #include "vast/concept/printable/vast/bitmap.hpp"
 
 using namespace std;
+using namespace std::chrono;
 using namespace caf;
 using namespace vast;
 
@@ -28,10 +31,12 @@ class config : public actor_system_config {
 public:
   string filename = "";
   uint32_t bound = 0;
+  bool print_results;
   config() {
     opt_group{custom_options_, "global"}
     .add(filename, "data-file,f", "File with test data (one value per line)")
-    .add(bound, "bound,b", "maximum value (0 will scan values)");
+    .add(bound, "bound,b", "maximum value (0 will scan values)")
+    .add(print_results, "print,p", "print resulting bitmap index");
   }
 };
 
@@ -57,7 +62,7 @@ void caf_main(actor_system&, const config& cfg) {
     auto itr = max_element(values.begin(), values.end());
     bound = *itr;
   }
-  cout << "Maximum value is  " << bound << "." << endl;
+  cout << "Maximum value is '" << bound << "'." << endl;
 
   // Extract key set
   vector<uint32_t> keys = values;
@@ -65,18 +70,23 @@ void caf_main(actor_system&, const config& cfg) {
   auto last = std::unique(keys.begin(), keys.end());
   keys.erase(last, end(keys));
 
-  // MEASURE: from
+  auto start = high_resolution_clock::now();
   bitmap_index<uint32_t, equality_coder<wah_bitmap>> bmi{bound + 1};
   for (auto& val : values)
     bmi.push_back(val);
-  // MEASURE: to
+  auto stop = high_resolution_clock::now();
 
-  // print index by key
-  auto& coder = bmi.coder();
-  auto& storage = coder.storage();
-  for (auto& key : keys)
-    cout << "Index for value " << key << ":" << endl
-         << to_string(storage.at(key)) << endl;
+  if (cfg.print_results) {
+    // print index by key
+    auto& coder = bmi.coder();
+    auto& storage = coder.storage();
+    for (auto& key : keys)
+      cout << "Index for value " << key << ":" << endl
+           << storage[key] << endl;
+  }
+  cout << "Time: '"
+       << duration_cast<milliseconds>(stop - start).count()
+       << "' ms" << endl;
 }
 
 CAF_MAIN()
