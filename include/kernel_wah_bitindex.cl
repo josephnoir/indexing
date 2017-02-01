@@ -1,9 +1,8 @@
-/*
- * function: wah_bitmap
- * input:    32-bit integer
- * output:   wah compressed bitmap index, offsets for its values
- * table:    
- */
+/******************************************************************************
+ * function: wah_bitmap                                                       *
+ * input:    32-bit integer                                                   *
+ * output:   wah compressed bitmap index, offsets for its values              *
+ ******************************************************************************/
 
 #define FENCE_TYPE CLK_LOCAL_MEM_FENCE
 #define WORK_GROUP_SIZE 1024
