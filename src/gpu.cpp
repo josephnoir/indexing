@@ -106,7 +106,6 @@ behavior indexer(stateful_actor<indexer_state>* self) {
       self->state.batch_size = batch_size;
       self->state.print_results = print_results;
       self->state.bound = bound;
-      // MEASURE: start
       self->state.start = high_resolution_clock::now();
     },
     [=] (index_atom) {
@@ -129,7 +128,7 @@ behavior indexer(stateful_actor<indexer_state>* self) {
       uint32_t num_values = input.size();
       vector<uint32_t> config{
         num_values,      // input
-        num_values * 2,  // index
+        num_values * 3,  // index
         num_values       // processed values
       };
 
@@ -140,7 +139,7 @@ behavior indexer(stateful_actor<indexer_state>* self) {
       self->send(self, index_atom::value);
     },
     [=](const vector<uint32_t>& config, const vector<uint32_t>& input,
-        vector<uint32_t> index,  const vector<uint32_t>& offsets) {
+        const vector<uint32_t>& index,  const vector<uint32_t>& offsets) {
       self->state.in_progress -= 1;
   /*
       cout << "conf: " << config.size() << endl
@@ -159,15 +158,23 @@ behavior indexer(stateful_actor<indexer_state>* self) {
   */
       auto keycnt = config[0];
       auto index_length = config[1];
+      cout << "Index has " << index_length << " elements with "
+           << keycnt << " keys" << endl;
       for (size_t i = 0; i < keycnt; ++i) {
         auto value = input[i];
         auto offset = offsets[i];
         auto length = (i == keycnt - 1) ? index_length - offsets[i]
                                         : offsets[i + 1] - offsets[i];
+        cout << "Accessing " << value << " from " << offset
+             << " to " << (offset + length) << " (" << length << " blocks) key "
+             << i << " of " << keycnt << "." << endl;
         auto& dex = self->state.index;
         dex[value].insert(dex[value].end(),
-                          make_move_iterator(index.begin() + offset),
-                          make_move_iterator(index.begin() + offset + length));
+                          // tmp.begin(), tmp.end());
+                          index.begin() + offset,
+                          index.begin() + offset + length);
+                          //make_move_iterator(index.begin() + offset),
+                          //make_move_iterator(index.begin() + offset + length));
       }
 
       auto processed = config[2];
@@ -275,7 +282,7 @@ void caf_main(actor_system& system, const config& cfg) {
                                             : cfg.concurrently;
   auto batch_size = min(cfg.batch_size, static_cast<uint32_t>(values.size()));
   auto double_size = [](const vector<uint32_t>&, const vector<uint32_t>& in) {
-    return in.size() * 2;
+    return in.size() * 3;
   };
   auto normal_size = [](const vector<uint32_t>&, const vector<uint32_t>& in) {
     return in.size();
@@ -291,6 +298,8 @@ void caf_main(actor_system& system, const config& cfg) {
     buffer<vector<uint32_t>>{normal_size},  // chids
     buffer<vector<uint32_t>>{normal_size}   // lits
   );
+
+  //unordered_map<uint32_t,vector<uint32_t>> index;
   auto idx_manger = system.spawn(indexer);
   anon_send(idx_manger, init_atom::value, worker, values, batch_size,
             concurrently, cfg.print_results, bound);

@@ -122,14 +122,17 @@ size_t merged_lit_by_val_chids(global uint* input, global uint* chids,
 
 void produce_fills(global uint* input, global uint* chids,
                    size_t idx, size_t total) {
+  uint tmp = chids[idx];
   if (idx != 0 && (input[idx] == input[idx - 1] &&
                    chids[idx] == chids[idx - 1])) {
-    chids[idx] = chids[idx] - chids[idx - 1] - 1;
-  } else {
+    tmp = chids[idx] - chids[idx - 1] - 1;
+  } /*else {
     if (chids[idx] != 0) {
       chids[idx] = chids[idx] - 1;
     }
-  }
+  }*/
+  barrier(FENCE_TYPE);
+  chids[idx] = tmp;
 }
 
 size_t fuse_fill_literals(global uint* chids, global uint* lits,

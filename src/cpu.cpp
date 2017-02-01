@@ -195,9 +195,9 @@ void produce_chunck_id_literals(vector<uint32_t>& rids,
   assert(rids.size() == chids.size());
   assert(rids.size() == lits.size());
   for (size_t i = 0; i < rids.size(); ++i) {
-    chids[i] = rids[i] / 31;
     lits[i]  = 0x1 << (rids[i] % 31);
     lits[i] |= 0x1 << 31;
+    chids[i] = rids[i] / 31;
   }
 }
 
@@ -212,21 +212,33 @@ size_t merged_lit_by_val_chids(vector<uint32_t>& input,
 // in : input, chids, k (reduced length)
 // out: chids with 0-fill symbols
 void produce_fills(vector<uint32_t>& input,
-                   vector<uint32_t>& chids, size_t k) {
-  vector<uint64_t> heads(k);
-  adjacent_difference(begin(input), end(input), begin(heads));
+                   vector<uint32_t>& chids,
+                   size_t k) {
+  vector<uint32_t> heads(k);
+  /*
+  for (size_t i = 1; i < k; ++i) {
+    heads[i] = (input[i] != input[i - 1]); // || (chids[i] != chids[i - 1]); // TODO: Should this use input or input :: chids as a key?
+  }
+  */
+  adjacent_difference(begin(input), begin(input) + k, begin(heads));
   heads.front() = 1; // not sure about this one
-  //for (size_t i = 0; i < input.size(); ++i) {
-  //  cout << as_binary(keys[i]) << " --> " << heads[i] << endl;
-  //}
+  /*
+  cout << "heads of keys" << endl;
+  for (size_t i = 0; i < k; ++i) {
+    cout << as_binary(input[i]) << " " << as_binary(chids[i]) << " " << as_binary(heads[i]) << endl;
+  }
+  */
+  vector<uint32_t> new_chids(k);
   for (size_t i = 0; i < k; ++i) {
     if (heads[i] == 0) {
-      chids[i] = chids[i] - chids[i - 1] - 1;
+      new_chids[i] = chids[i] - chids[i - 1] - 1;
     } else {
-      if (chids[i] != 0)
-        chids[i] = chids[i] - 1;
+      new_chids[i] = chids[i];
+      //if (chids[i] != 0)
+      //  new_chids[i] = chids[i] - 1;
     }
   }
+  chids = std::move(new_chids);
 }
 
 // in : chids, lits, k
@@ -258,6 +270,26 @@ size_t compute_colum_length(vector<uint32_t>& input,
   auto keycnt = reduce_by_key(input, tmp);
   offsets = exclusive_scan(tmp);
   return keycnt;
+}
+
+void print_bin(const vector<uint32_t>& vec, uint32_t k = 0) {
+  auto end = (k == 0) ? vec.size() 
+                      : (k < vec.size()) ? k
+                                         : vec.size() ;
+  for (uint32_t i = 0; i < end; ++i) {
+    cout << as_binary(vec[i]) << " ";
+  }
+  cout << endl;
+}
+
+void print_dec(const vector<uint32_t>& vec, uint32_t k = 0) {
+  auto end = (k == 0) ? vec.size() 
+                      : (k < vec.size()) ? k
+                                         : vec.size() ;
+  for (uint32_t i = 0; i < end; ++i) {
+    cout << setw(4) << vec[i] << " ";
+  }
+  cout << endl;
 }
 
 class config : public actor_system_config {
@@ -305,15 +337,33 @@ void caf_main(actor_system&, const config& cfg) {
   vector<uint32_t> lits(input.size());
 
   sort_rids_by_value(input, rids);
+  /*
+  cout << "After sort rids by value" << endl;
+  print_dec(input);
+  print_dec(rids);
+  */
   produce_chunck_id_literals(rids, chids, lits);
+  /*
+  cout << "Produced chids and lits" << endl;
+  for (size_t i = 0; i < rids.size(); ++i) {
+    cout << as_binary(rids[i]) << " --> " << as_binary(lits[i]) << " :: " << as_binary(chids[i]) << endl;
+  }
+  cout << "Will be merging by key" << endl;
+  for (size_t i = 0; i < rids.size(); ++i) {
+    cout << "(" << as_binary(input[i]) << ", " << as_binary(chids[i]) << " ) --> " << as_binary(lits[i]) << endl;
+  }
+  */
   auto k = merged_lit_by_val_chids(input, chids, lits);
+
   produce_fills(input, chids, k);
+  //cout << "Produced new chids" << endl;
+  //print_dec(chids, k);
   vector<uint32_t> index(2 * k);
   auto index_length = fuse_fill_literals(chids, lits, index, k);
   vector<uint32_t> offsets(k);
   auto keycnt = compute_colum_length(input, chids, offsets, k);
 
-/*
+  /*
   cout << "index length = " << index_length << endl;
   for (uint32_t i = 0; i < index_length; ++i) {
     //cout << as_binary(input[i]) << endl;
@@ -321,37 +371,44 @@ void caf_main(actor_system&, const config& cfg) {
          << as_binary(index[i]) << " :: "
          << as_binary(offsets[i]) << endl;
   }
-*/
+  */
 
-  cout << "Created index for " << amount
-       << " values, with " << index_length
-       << " blocks and " << keycnt
-       << " keys." << endl;
+  //cout << "Index:" << endl;
 
   // Searching for some sensible output format
-  for (size_t i = 0; i < keycnt; ++i) {
-    auto key = input[i];
-    auto offset = offsets[i];
-    auto length = (i == keycnt - 1) ? index_length - offsets[i]
-                                    : offsets[i + 1] - offsets[i];
-    vector<uint32_t> tmp{index.begin() + offset,
-                         index.begin() + offset + length};
-    cout << key << '\t' << decoded_bitmap(tmp) << endl;
-    /*
-    cout << "Index for key " << key << ":" << endl
-         << "> length " << length << endl << "> offset " << offset << endl;
-    for (size_t j = 0; j < length; ++j) {
-      cout << as_binary(index[offset + j]) << " ";
+  if (cfg.print_results) {
+    uint32_t next = 0;
+    for (size_t i = 0; i < keycnt; ++i) {
+      auto key = input[i];
+      if (key != next) {
+        for (uint32_t j = next; j < key; ++j) {
+          cout << j << "\t" << endl;
+        }
+      }
+      auto offset = offsets[i];
+      auto length = (i == keycnt - 1) ? index_length - offsets[i]
+                                      : offsets[i + 1] - offsets[i];
+      vector<uint32_t> tmp{index.begin() + offset,
+                           index.begin() + offset + length};
+      /*
+      cout << "blocks:\t";
+      for (auto t : tmp) {
+        cout << as_binary(t) << " ";
+      }
+      cout << endl;
+      */
+      cout << key << '\t' << decoded_bitmap(tmp) << endl;
+      next = key + 1;
+      /*
+      cout << "Index for key " << key << ":" << endl
+           << "> length " << length << endl << "> offset " << offset << endl;
+      for (size_t j = 0; j < length; ++j) {
+        cout << as_binary(index[offset + j]) << " ";
+      }
+      cout << endl << endl;
+      */
     }
-    cout << endl << endl;
-    */
   }
-  /*
-  cout << "Complete index is:" << endl;
-  for (auto& i : index) {
-    cout << "> " << as_binary(i) << endl;
-  }
-  */
 }
 
 CAF_MAIN()
