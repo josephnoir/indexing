@@ -20,6 +20,7 @@
 
 #include "vast/concept/printable/stream.hpp"
 #include "vast/concept/printable/to_string.hpp"
+#include "vast/concept/printable/vast/coder.hpp"
 #include "vast/concept/printable/vast/bitmap.hpp"
 
 using namespace std;
@@ -64,11 +65,13 @@ void caf_main(actor_system&, const config& cfg) {
   }
   cout << "Maximum value is '" << bound << "'." << endl;
 
+  /*
   // Extract key set
   vector<uint32_t> keys = values;
   std::sort(keys.begin(), keys.end());
   auto last = std::unique(keys.begin(), keys.end());
   keys.erase(last, end(keys));
+  */
 
   auto start = high_resolution_clock::now();
   bitmap_index<uint32_t, equality_coder<wah_bitmap>> bmi{bound + 1};
@@ -79,10 +82,13 @@ void caf_main(actor_system&, const config& cfg) {
   if (cfg.print_results) {
     // print index by key
     auto& coder = bmi.coder();
+    cout << coder << endl;
+    /*
     auto& storage = coder.storage();
     for (auto& key : keys)
       cout << "Index for value " << key << ":" << endl
            << storage[key] << endl;
+    */
   }
   cout << "Time: '"
        << duration_cast<milliseconds>(stop - start).count()
