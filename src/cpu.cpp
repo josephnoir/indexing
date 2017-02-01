@@ -373,40 +373,28 @@ void caf_main(actor_system&, const config& cfg) {
   }
   */
 
-  //cout << "Index:" << endl;
-
-  // Searching for some sensible output format
+  //cout << "index lenth: " << index_length << endl;
   if (cfg.print_results) {
     uint32_t next = 0;
     for (size_t i = 0; i < keycnt; ++i) {
       auto key = input[i];
-      if (key != next) {
-        for (uint32_t j = next; j < key; ++j) {
-          cout << j << "\t" << endl;
-        }
-      }
       auto offset = offsets[i];
       auto length = (i == keycnt - 1) ? index_length - offsets[i]
                                       : offsets[i + 1] - offsets[i];
       vector<uint32_t> tmp{index.begin() + offset,
                            index.begin() + offset + length};
       /*
-      cout << "blocks:\t";
-      for (auto t : tmp) {
-        cout << as_binary(t) << " ";
-      }
-      cout << endl;
+      cout << "Accessing " << key << " from " << offset
+           << " to " << (offset + length) << " (" << length << " blocks, key "
+           << (i + 1) << " of " << keycnt << ")" << endl;
       */
+      if (key != next) {
+        for (uint32_t j = next; j < key; ++j) {
+          cout << j << "\t" << endl;
+        }
+      }
       cout << key << '\t' << decoded_bitmap(tmp) << endl;
       next = key + 1;
-      /*
-      cout << "Index for key " << key << ":" << endl
-           << "> length " << length << endl << "> offset " << offset << endl;
-      for (size_t j = 0; j < length; ++j) {
-        cout << as_binary(index[offset + j]) << " ";
-      }
-      cout << endl << endl;
-      */
     }
   }
 }

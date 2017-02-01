@@ -161,15 +161,15 @@ behavior indexer(stateful_actor<indexer_state>* self) {
       cout << "Index has " << index_length << " elements with "
            << keycnt << " keys" << endl;
       for (size_t i = 0; i < keycnt; ++i) {
-        auto value = input[i];
+        auto key = input[i];
         auto offset = offsets[i];
         auto length = (i == keycnt - 1) ? index_length - offsets[i]
                                         : offsets[i + 1] - offsets[i];
-        cout << "Accessing " << value << " from " << offset
-             << " to " << (offset + length) << " (" << length << " blocks) key "
-             << i << " of " << keycnt << "." << endl;
+        cout << "Accessing " << key << " from " << offset
+             << " to " << (offset + length) << " (" << length << " blocks, key "
+             << (i + 1) << " of " << keycnt << ")" << endl;
         auto& dex = self->state.index;
-        dex[value].insert(dex[value].end(),
+        dex[key].insert(dex[key].end(),
                           // tmp.begin(), tmp.end());
                           index.begin() + offset,
                           index.begin() + offset + length);
