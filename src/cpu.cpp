@@ -3,13 +3,17 @@
 #include <random>
 #include <vector>
 #include <cassert>
+#include <fstream>
 #include <iomanip>
 #include <numeric>
 #include <sstream>
 #include <iostream>
 #include <algorithm>
 
+#include "caf/all.hpp"
+
 using namespace std;
+using namespace caf;
 
 namespace {
 
@@ -29,6 +33,35 @@ string as_binary(T num) {
     ++added_bits;
   }
   return s.str();
+}
+
+string decoded_bitmap(const vector<uint32_t>& bitmap) {
+  //cout << endl;
+  //for (auto t : bitmap) {
+  //  cout << as_binary(t) << " ";
+  //}
+  //cout << endl;
+  stringstream s;
+  for (auto& block : bitmap) {
+    if (block & (0x1 << 31)) {
+      uint32_t mask = 0x1;
+      for (int i = 0; i < 31; ++i) {
+        s << ((block & mask) ? '1' : '0');
+        mask <<= 1;
+      }
+    } else {
+      auto bit = (block & (0x1 << 30)) ? '1' : '0';
+      auto times = (block & (~(0x3 << 30)));
+      for (uint32_t i = 0; i < times; ++i) {
+        for (uint32_t j = 0; j < 31; ++j) {
+          s << bit;
+        }
+      }
+    }
+  }
+  auto res = s.str();
+  res.erase(res.find_last_not_of("0") + 1);
+  return res;
 }
 
 // Reduce by key for OR operation
@@ -227,27 +260,44 @@ size_t compute_colum_length(vector<uint32_t>& input,
   return keycnt;
 }
 
+class config : public actor_system_config {
+public:
+  string filename = "";
+  uint32_t bound = 0;
+  bool print_results;
+  config() {
+    opt_group{custom_options_, "global"}
+    .add(filename, "data-file,f", "File with test data (one value per line)")
+    .add(bound, "bound,b", "maximum value (0 will scan values)")
+    .add(print_results, "print,p", "print resulting bitmap index");
+  }
+};
+
 } // namespace <anonymous>
 
-int main() {
-  /*
-  vector<uint32_t> values{10,  7, 22,  6,  7,
-                           1,  9, 42,  2,  5,
-                          13,  3,  2,  1,  0,
-                           1, 18, 18,  3, 13,
-                           5,  9,  0,  3,  2,
-                          19,  5, 23, 22, 10,
-                           6, 22};
+void caf_main(actor_system&, const config& cfg) {
+  vector<uint32_t> values;
+  if (cfg.filename.empty()) {
+    values = {10,  7, 22,  6,  7,  1,  9, 42,  2,  5,
+              13,  3,  2,  1,  0,  1, 18, 18,  3, 13,
+               5,  9,  0,  3,  2, 19,  5, 23, 22, 10,
+               6, 22};
+  } else {
+    cout << "Reading data from '" << cfg.filename << "' ... " << flush;
+    ifstream source{cfg.filename, std::ios::in};
+    uint32_t next;
+    while (source >> next) {
+      values.push_back(next);
+    }
+  }
   auto amount = values.size();
-  */
-  size_t max_value = 32;
-  size_t amount = 1024;
-  std::mt19937 rng;
-  rng.seed(std::random_device()());
-  std::uniform_int_distribution<uint32_t> dist(0,max_value - 1);
-  vector<uint32_t> values(amount);
-  for (size_t i = 0; i < amount; ++i)
-    values[i] = dist(rng);
+  cout << "Read " << amount << " values." << endl;
+  auto bound = cfg.bound;
+  if (bound == 0 && amount > 0) {
+    auto itr = max_element(values.begin(), values.end());
+    bound = *itr;
+  }
+  cout << "Maximum value is '" << bound << "'." << endl;
 
   auto input = values;
   vector<uint32_t> rids(input.size());
@@ -280,16 +330,21 @@ int main() {
 
   // Searching for some sensible output format
   for (size_t i = 0; i < keycnt; ++i) {
-    auto value = input[i];
+    auto key = input[i];
     auto offset = offsets[i];
     auto length = (i == keycnt - 1) ? index_length - offsets[i]
                                     : offsets[i + 1] - offsets[i];
-    cout << "Index for value " << value << ":" << endl
+    vector<uint32_t> tmp{index.begin() + offset,
+                         index.begin() + offset + length};
+    cout << key << '\t' << decoded_bitmap(tmp) << endl;
+    /*
+    cout << "Index for key " << key << ":" << endl
          << "> length " << length << endl << "> offset " << offset << endl;
     for (size_t j = 0; j < length; ++j) {
       cout << as_binary(index[offset + j]) << " ";
     }
     cout << endl << endl;
+    */
   }
   /*
   cout << "Complete index is:" << endl;
@@ -298,3 +353,5 @@ int main() {
   }
   */
 }
+
+CAF_MAIN()
