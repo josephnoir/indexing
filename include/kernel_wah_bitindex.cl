@@ -142,9 +142,9 @@ size_t fuse_fill_literals(global uint* chids, global uint* lits,
   local uint markers [WORK_GROUP_SIZE * 2];
   local uint position[WORK_GROUP_SIZE * 2];
   volatile local int len;
+  len = 0;
   uint a =  2 * idx;
   uint b = (2 * idx) + 1;
-  len = 0;
   index[a] = chids[idx];
   index[b] = lits[idx];
   barrier(FENCE_TYPE);
@@ -167,12 +167,15 @@ size_t fuse_fill_literals(global uint* chids, global uint* lits,
     if (markers[a] == 1) {
       index[position[a]] = tmp_a;
       atomic_add(&len, 1);
+      //atomic_max(&len, position[a] + 1);
     }
     if (markers[b] == 1) {
       index[position[b]] = tmp_b;
       atomic_add(&len, 1);
+      //atomic_max(&len, position[b] + 1);
     }
   }
+  // end stream compaction
   barrier(FENCE_TYPE); // <-- should there be a barrier here?
   return len;
 }
@@ -180,7 +183,8 @@ size_t fuse_fill_literals(global uint* chids, global uint* lits,
 size_t compute_colum_length(global uint* input, global uint* chids,
                             global uint* offsets, size_t idx, size_t k) {
   local uint tmp[WORK_GROUP_SIZE];
-  tmp[idx] = (1 + (chids[idx] == 0 ? 0 : 1));
+  tmp[idx] = (1 + (chids[idx] != 0)); // ? 0 : 1));
+  barrier(FENCE_TYPE);
   uint keycnt = reduce_by_key_SUM(input, tmp, idx, k);
   // inclusive scan to create offsets, should be parallel
   barrier(FENCE_TYPE);
@@ -190,6 +194,7 @@ size_t compute_colum_length(global uint* input, global uint* chids,
       offsets[i] = offsets[i - 1] + tmp[i - 1];
     }
   }
+  barrier(FENCE_TYPE);
   return keycnt;
 }
 
@@ -235,6 +240,7 @@ size_t reduce_by_key_SUM(global uint* keys, local uint* data,
   local uint heads[WORK_GROUP_SIZE];
   heads[idx] = idx == 0 || (keys[idx] != keys[idx - 1]);
   volatile local int k;
+  barrier(FENCE_TYPE);
   if (heads[idx] != 0 && idx < total) {
     uint val = data[idx];
     uint curr = idx + 1;
