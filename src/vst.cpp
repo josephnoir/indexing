@@ -57,7 +57,7 @@ void caf_main(actor_system&, const config& cfg) {
     }
   }
   auto amount = values.size();
-  cout << "Read " << amount << " values." << endl;
+  cout << "'" << amount << "' values." << endl;
   auto bound = cfg.bound;
   if (bound == 0 && amount > 0) {
     auto itr = max_element(values.begin(), values.end());

@@ -215,25 +215,15 @@ void produce_fills(vector<uint32_t>& input,
                    vector<uint32_t>& chids,
                    size_t k) {
   vector<uint32_t> heads(k);
-  /*
-  for (size_t i = 1; i < k; ++i) {
-    heads[i] = (input[i] != input[i - 1]); // || (chids[i] != chids[i - 1]); // TODO: Should this use input or input :: chids as a key?
-  }
-  */
   adjacent_difference(begin(input), begin(input) + k, begin(heads));
-  heads.front() = 1; // not sure about this one
-  /*
-  cout << "heads of keys" << endl;
-  for (size_t i = 0; i < k; ++i) {
-    cout << as_binary(input[i]) << " " << as_binary(chids[i]) << " " << as_binary(heads[i]) << endl;
-  }
-  */
+  heads.front() = 1;
   vector<uint32_t> new_chids(k);
   for (size_t i = 0; i < k; ++i) {
     if (heads[i] == 0) {
       new_chids[i] = chids[i] - chids[i - 1] - 1;
     } else {
       new_chids[i] = chids[i];
+      // This seems to result in the loss of fills
       //if (chids[i] != 0)
       //  new_chids[i] = chids[i] - 1;
     }
@@ -272,26 +262,6 @@ size_t compute_colum_length(vector<uint32_t>& input,
   return keycnt;
 }
 
-void print_bin(const vector<uint32_t>& vec, uint32_t k = 0) {
-  auto end = (k == 0) ? vec.size() 
-                      : (k < vec.size()) ? k
-                                         : vec.size() ;
-  for (uint32_t i = 0; i < end; ++i) {
-    cout << as_binary(vec[i]) << " ";
-  }
-  cout << endl;
-}
-
-void print_dec(const vector<uint32_t>& vec, uint32_t k = 0) {
-  auto end = (k == 0) ? vec.size() 
-                      : (k < vec.size()) ? k
-                                         : vec.size() ;
-  for (uint32_t i = 0; i < end; ++i) {
-    cout << setw(4) << vec[i] << " ";
-  }
-  cout << endl;
-}
-
 class config : public actor_system_config {
 public:
   string filename = "";
@@ -323,7 +293,7 @@ void caf_main(actor_system&, const config& cfg) {
     }
   }
   auto amount = values.size();
-  cout << "Read " << amount << " values." << endl;
+  cout << "'" << amount << "' values." << endl;
   auto bound = cfg.bound;
   if (bound == 0 && amount > 0) {
     auto itr = max_element(values.begin(), values.end());
@@ -337,43 +307,15 @@ void caf_main(actor_system&, const config& cfg) {
   vector<uint32_t> lits(input.size());
 
   sort_rids_by_value(input, rids);
-  /*
-  cout << "After sort rids by value" << endl;
-  print_dec(input);
-  print_dec(rids);
-  */
   produce_chunck_id_literals(rids, chids, lits);
-  /*
-  cout << "Produced chids and lits" << endl;
-  for (size_t i = 0; i < rids.size(); ++i) {
-    cout << as_binary(rids[i]) << " --> " << as_binary(lits[i]) << " :: " << as_binary(chids[i]) << endl;
-  }
-  cout << "Will be merging by key" << endl;
-  for (size_t i = 0; i < rids.size(); ++i) {
-    cout << "(" << as_binary(input[i]) << ", " << as_binary(chids[i]) << " ) --> " << as_binary(lits[i]) << endl;
-  }
-  */
   auto k = merged_lit_by_val_chids(input, chids, lits);
-
   produce_fills(input, chids, k);
-  //cout << "Produced new chids" << endl;
-  //print_dec(chids, k);
   vector<uint32_t> index(2 * k);
   auto index_length = fuse_fill_literals(chids, lits, index, k);
   vector<uint32_t> offsets(k);
   auto keycnt = compute_colum_length(input, chids, offsets, k);
-
-  /*
-  cout << "index length = " << index_length << endl;
-  for (uint32_t i = 0; i < index_length; ++i) {
-    //cout << as_binary(input[i]) << endl;
-    cout << as_binary(input[i]) << " :: "
-         << as_binary(index[i]) << " :: "
-         << as_binary(offsets[i]) << endl;
-  }
-  */
-
-  //cout << "index lenth: " << index_length << endl;
+  //cout << "Index has " << index_length << " elements with "
+  //     << keycnt << " keys" << endl;
   if (cfg.print_results) {
     uint32_t next = 0;
     for (size_t i = 0; i < keycnt; ++i) {

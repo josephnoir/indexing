@@ -128,7 +128,7 @@ behavior indexer(stateful_actor<indexer_state>* self) {
       uint32_t num_values = input.size();
       vector<uint32_t> config{
         num_values,      // input
-        num_values * 3,  // index
+        num_values * 2,  // index
         num_values       // processed values
       };
 
@@ -141,33 +141,27 @@ behavior indexer(stateful_actor<indexer_state>* self) {
     [=](const vector<uint32_t>& config, const vector<uint32_t>& input,
         const vector<uint32_t>& index,  const vector<uint32_t>& offsets) {
       self->state.in_progress -= 1;
-  /*
-      cout << "conf: " << config.size() << endl
-           << "inpt: " << input.size() << endl
-           << "indx: " << index.size() << endl
-           << "offs: " << offsets.size() << endl;
-
-      auto length = config[4];
-      cout << "index length = " << length << endl;
+      auto keycnt = config[0];
+      auto index_length = config[1];
+      //cout << "Index has " << index_length << " elements with "
+      //     << keycnt << " keys" << endl;
+      /*
+      auto length = config[1];
       for (uint32_t i = 0; i < length; ++i) {
         //cout << as_binary(input[i]) << endl;
-        cout << as_binary(input[i]) << " :: "
+        cout //<< as_binary(input[i]) << " :: "
              << as_binary(index[i]) << " :: "
              << as_binary(offsets[i]) << endl;
       }
-  */
-      auto keycnt = config[0];
-      auto index_length = config[1];
-      cout << "Index has " << index_length << " elements with "
-           << keycnt << " keys" << endl;
+      */
       for (size_t i = 0; i < keycnt; ++i) {
         auto key = input[i];
         auto offset = offsets[i];
         auto length = (i == keycnt - 1) ? index_length - offsets[i]
                                         : offsets[i + 1] - offsets[i];
-        cout << "Accessing " << key << " from " << offset
-             << " to " << (offset + length) << " (" << length << " blocks, key "
-             << (i + 1) << " of " << keycnt << ")" << endl;
+        //cout << "Accessing " << key << " from " << offset
+        //     << " to " << (offset + length) << " (" << length << " blocks, key "
+        //     << (i + 1) << " of " << keycnt << ")" << endl;
         auto& dex = self->state.index;
         dex[key].insert(dex[key].end(),
                           // tmp.begin(), tmp.end());
@@ -206,8 +200,8 @@ class config : public actor_system_config {
 public:
   string filename = "";
   uint32_t bound = 0;
-  string device_name = "GeForce GTX 780M";
-  uint32_t batch_size = 1024;
+  string device_name = "GeForce GT 650M";
+  uint32_t batch_size = 1023;
   uint32_t concurrently = 0;
   bool print_results;
   config() {
@@ -217,7 +211,7 @@ public:
     .add(filename, "data-file,f", "file with test data (one value per line)")
     .add(bound, "bound,b", "maximum value (0 will scan values)")
     .add(device_name, "device,d", "device for computation (GeForce GTX 780M)")
-    .add(batch_size, "batch-size,b", "values indexed in one batch (1024)")
+    .add(batch_size, "batch-size,b", "values indexed in one batch (1023)")
     .add(print_results, "print,p", "print resulting bitmap index")
     .add(concurrently, "concurrently,c", "concurrent batches sent to GPU "
                                          "(available compute units)");
@@ -239,13 +233,13 @@ void caf_main(actor_system& system, const config& cfg) {
       values.push_back(next);
     }
   }
-  cout << "Read '" << values.size() << "' values." << endl;
+  cout << "'" << values.size() << "' values." << endl;
   auto bound = cfg.bound;
   if (bound == 0 && !values.empty()) {
     auto itr = max_element(values.begin(), values.end());
     bound = *itr;
   }
-  cout << "Maximum value is  '" << bound << "'." << endl;
+  cout << "Maximum value is '" << bound << "'." << endl;
 
   // read cl kernel file
   auto filename = string("./include/") + kernel_file;
@@ -282,7 +276,7 @@ void caf_main(actor_system& system, const config& cfg) {
                                             : cfg.concurrently;
   auto batch_size = min(cfg.batch_size, static_cast<uint32_t>(values.size()));
   auto double_size = [](const vector<uint32_t>&, const vector<uint32_t>& in) {
-    return in.size() * 3;
+    return in.size() * 2;
   };
   auto normal_size = [](const vector<uint32_t>&, const vector<uint32_t>& in) {
     return in.size();
