@@ -25,6 +25,7 @@ using namespace caf::opencl;
 
 namespace {
 
+using add_atom = atom_constant<atom("add")>;
 using init_atom = atom_constant<atom("init")>;
 using index_atom = atom_constant<atom("index")>;
 
@@ -52,11 +53,9 @@ string as_binary(T num) {
 }
 
 string decoded_bitmap(const vector<uint32_t>& bitmap) {
-  //cout << endl;
-  //for (auto t : bitmap) {
-  //  cout << as_binary(t) << " ";
-  //}
-  //cout << endl;
+  if (bitmap.empty()) {
+    return "";
+  }
   stringstream s;
   for (auto& block : bitmap) {
     if (block & (0x1 << 31)) {
@@ -76,8 +75,88 @@ string decoded_bitmap(const vector<uint32_t>& bitmap) {
     }
   }
   auto res = s.str();
-  res.erase(res.find_last_not_of("0") + 1);
-  return res;
+  auto tmp = res.size();
+  s.str(string());
+  s << tmp;
+  return s.str();
+  //res.erase(res.find_last_not_of("0") + 1);
+  //return res;
+  /*
+  for (auto b : bitmap) {
+    s << as_binary(b) << " ";
+  }
+  return s.str();
+  */
+}
+
+struct bitmap_index {
+  uint32_t processed;
+  uint32_t remaining;
+  uint32_t bound;
+  unordered_map<uint32_t,vector<uint32_t>> index;
+  high_resolution_clock::time_point start;
+  bool print_results;
+};
+
+behavior merger(stateful_actor<bitmap_index>* self) {
+  return {
+    [=](init_atom, bool print_results, uint32_t remaining, uint32_t bound) {
+      self->state.start = high_resolution_clock::now();
+      self->state.print_results = print_results;
+      self->state.remaining = remaining;
+      self->state.bound = bound;
+    },
+    [=](add_atom, uint32_t keycnt, uint32_t index_length, uint32_t batch_size,
+        vector<uint32_t> keys, vector<uint32_t> offsets,
+        vector<uint32_t> index) {
+      static_cast<void>(keycnt);
+      static_cast<void>(index_length);
+      static_cast<void>(batch_size);
+      static_cast<void>(keys);
+      static_cast<void>(offsets);
+      static_cast<void>(index);
+      // built bitmap index, to concatenate indices we need some 
+      // fill inbetween batches ... furthermore, calculated batches don't
+      // seem to have the same length ... not sure how to solve this ...
+      /*
+      auto blocks = batch_size / 31;
+      uint32_t next = 0;
+      for (size_t i = 0; i < keycnt; ++i) {
+        auto key = keys[i];
+        auto offset = offsets[i];
+        auto length = (i == keycnt - 1) ? index_length - offsets[i]
+                                        : offsets[i + 1] - offsets[i];
+        auto& dex = self->state.index;
+        // Add fills to keys that are not in this index,
+        // required to be able to append keys from the next batch
+        for (uint32_t i = next; i < key; ++i)
+          dex[i].push_back(blocks);
+        dex[key].insert(dex[key].end(),
+                        make_move_iterator(index.begin() + offset),
+                        make_move_iterator(index.begin() + offset + length));
+        next = key + 1;
+      }
+      */
+      self->state.processed += batch_size;
+      self->state.remaining -= batch_size;
+      if (self->state.remaining == 0) {
+        auto stop = chrono::high_resolution_clock::now();
+        if (self->state.print_results) {
+          /*
+          auto dex = self->state.index;
+          for (uint32_t key = 0; key <= self->state.bound; ++key) {
+            cout << key << '\t' << decoded_bitmap(dex[key]) << endl;
+          }
+          */
+          cout << "No complete index because merge is missing ..." << endl;
+        }
+        cout << "Time: '"
+             << duration_cast<milliseconds>(stop - self->state.start).count()
+             << "' ms" << endl;
+        self->quit();
+      }
+    }
+  };
 }
 
 struct indexer_state {
@@ -85,15 +164,13 @@ struct indexer_state {
   vector<uint32_t> input;
   uint32_t bound;
   uint32_t remaining;
+  uint32_t processed;
   uint32_t in_progress;
   uint32_t concurrently;
   uint32_t batch_size;
-  bool print_results;
-  unordered_map<uint32_t,vector<uint32_t>> index;
-  high_resolution_clock::time_point start;
 };
 
-behavior indexer(stateful_actor<indexer_state>* self) {
+behavior indexer(stateful_actor<indexer_state>* self, const actor& idx_merger) {
   return {
     [=] (init_atom, actor gpu_indexer, vector<uint32_t> input,
          uint32_t batch_size, uint32_t concurrently,
@@ -104,9 +181,9 @@ behavior indexer(stateful_actor<indexer_state>* self) {
       self->state.in_progress = 0;
       self->state.concurrently = concurrently;
       self->state.batch_size = batch_size;
-      self->state.print_results = print_results;
       self->state.bound = bound;
-      self->state.start = high_resolution_clock::now();
+      self->send(idx_merger, init_atom::value, print_results,
+                 self->state.remaining, bound);
     },
     [=] (index_atom) {
       auto& s = self->state;
@@ -138,56 +215,22 @@ behavior indexer(stateful_actor<indexer_state>* self) {
       s.in_progress += 1;
       self->send(self, index_atom::value);
     },
-    [=](const vector<uint32_t>& config, const vector<uint32_t>& input,
-        const vector<uint32_t>& index,  const vector<uint32_t>& offsets) {
+    [=](vector<uint32_t> config, vector<uint32_t> input,
+        vector<uint32_t> index,  vector<uint32_t> offsets) {
       self->state.in_progress -= 1;
       auto keycnt = config[0];
       auto index_length = config[1];
-      //cout << "Index has " << index_length << " elements with "
-      //     << keycnt << " keys" << endl;
-      /*
-      auto length = config[1];
-      for (uint32_t i = 0; i < length; ++i) {
-        //cout << as_binary(input[i]) << endl;
-        cout //<< as_binary(input[i]) << " :: "
-             << as_binary(index[i]) << " :: "
-             << as_binary(offsets[i]) << endl;
-      }
-      */
-      for (size_t i = 0; i < keycnt; ++i) {
-        auto key = input[i];
-        auto offset = offsets[i];
-        auto length = (i == keycnt - 1) ? index_length - offsets[i]
-                                        : offsets[i + 1] - offsets[i];
-        //cout << "Accessing " << key << " from " << offset
-        //     << " to " << (offset + length) << " (" << length << " blocks, key "
-        //     << (i + 1) << " of " << keycnt << ")" << endl;
-        auto& dex = self->state.index;
-        dex[key].insert(dex[key].end(),
-                          // tmp.begin(), tmp.end());
-                          index.begin() + offset,
-                          index.begin() + offset + length);
-                          //make_move_iterator(index.begin() + offset),
-                          //make_move_iterator(index.begin() + offset + length));
-      }
-
       auto processed = config[2];
       self->state.remaining -= processed;
+      self->state.processed += processed;
+
+      self->send(idx_merger, add_atom::value, keycnt, index_length, processed,
+                 move(input), move(offsets), move(index));
+
       if (self->state.remaining > 0) {
         self->send(self, index_atom::value);
         cout << "Values left: " << self->state.remaining << endl;
       } else {
-        auto stop = chrono::high_resolution_clock::now();
-        if (self->state.print_results) {
-          auto dex = self->state.index;
-          for (uint32_t key = 0; key <= self->state.bound; ++key) {
-            //cout << ignore(key) << '\t' << decoded_bitmap(dex[key]) << endl;
-            cout << key << '\t' << decoded_bitmap(dex[key]) << endl;
-          }
-        }
-        cout << "Time: '"
-             << duration_cast<milliseconds>(stop - self->state.start).count()
-             << "' ms" << endl;
         self->quit();
       }
     }
@@ -202,7 +245,7 @@ public:
   uint32_t bound = 0;
   string device_name = "GeForce GT 650M";
   uint32_t batch_size = 1023;
-  uint32_t concurrently = 0;
+  uint32_t concurrently = 1;
   bool print_results;
   config() {
     load<opencl::manager>();
@@ -213,8 +256,7 @@ public:
     .add(device_name, "device,d", "device for computation (GeForce GTX 780M)")
     .add(batch_size, "batch-size,b", "values indexed in one batch (1023)")
     .add(print_results, "print,p", "print resulting bitmap index")
-    .add(concurrently, "concurrently,c", "concurrent batches sent to GPU "
-                                         "(available compute units)");
+    .add(concurrently, "concurrently,c", "concurrent batches sent to GPU (1)");
   }
 };
 
@@ -293,8 +335,8 @@ void caf_main(actor_system& system, const config& cfg) {
     buffer<vector<uint32_t>>{normal_size}   // lits
   );
 
-  //unordered_map<uint32_t,vector<uint32_t>> index;
-  auto idx_manger = system.spawn(indexer);
+  auto idx_merger = system.spawn(merger);
+  auto idx_manger = system.spawn(indexer, idx_merger);
   anon_send(idx_manger, init_atom::value, worker, values, batch_size,
             concurrently, cfg.print_results, bound);
   anon_send(idx_manger, index_atom::value);
