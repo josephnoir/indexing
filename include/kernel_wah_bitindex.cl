@@ -85,7 +85,7 @@ kernel void kernel_wah_index(global uint* config,
   //config[5] = (uint) k;
   produce_fills(input, chids, idx, k);
   barrier(FENCE_TYPE);
-  //config[4] = k;
+  //config[1] = k;
   //index[idx] = chids[idx];
   //offsets[idx] = lits[idx];
   uint idxlen = fuse_fill_literals(chids, lits, index, idx, k);
@@ -123,8 +123,7 @@ size_t merged_lit_by_val_chids(global uint* input, global uint* chids,
 void produce_fills(global uint* input, global uint* chids,
                    size_t idx, size_t total) {
   uint tmp = chids[idx];
-  if (idx != 0 && (input[idx] == input[idx - 1] &&
-                   chids[idx] == chids[idx - 1])) {
+  if (idx != 0 && input[idx] == input[idx - 1]) {
     tmp = chids[idx] - chids[idx - 1] - 1;
   }
   // This branch leads to loss of fills at the beginning of
@@ -143,34 +142,34 @@ size_t fuse_fill_literals(global uint* chids, global uint* lits,
   local uint markers [WORK_GROUP_SIZE * 2];
   local uint position[WORK_GROUP_SIZE * 2];
   volatile local int len;
-  //uint a =  2 * idx;
-  //uint b = (2 * idx) + 1;
+  uint a =  2 * idx;
+  uint b = (2 * idx) + 1;
   len = 0;
-  index[ 2 * idx     ] = chids[idx];
-  index[(2 * idx) + 1] = lits[idx];
+  index[a] = chids[idx];
+  index[b] = lits[idx];
   barrier(FENCE_TYPE);
   // stream compaction
-  markers[ 2 * idx     ] = index[ 2 * idx     ] != 0; // ? 1 : 0;
-  markers[(2 * idx) + 1] = index[(2 * idx) + 1] != 0; // ? 1 : 0;
+  markers[a] = index[a] != 0; // ? 1 : 0;
+  markers[b] = index[b] != 0; // ? 1 : 0;
   barrier(FENCE_TYPE);
   // should be a parallel scan
   if (idx == 0) {
     position[0] = 0;
-    for (uint i = 1; i < 2 * total; ++i) {
+    for (uint i = 1; i < (2 * total); ++i) {
       position[i] = position[i - 1] + markers[i - 1];
     }
   }
   // end parallel scan
-  uint tmp_a = index[2 * idx];
-  uint tmp_b = index[(2 * idx) + 1];
+  uint tmp_a = index[a];
+  uint tmp_b = index[b];
   barrier(FENCE_TYPE);
   if (idx < total) {
-    if (markers[2 * idx] == 1) {
-      index[position[2 * idx]] = tmp_a;
+    if (markers[a] == 1) {
+      index[position[a]] = tmp_a;
       atomic_add(&len, 1);
     }
-    if (markers[(2 * idx) + 1] == 1) {
-      index[position[(2 * idx) + 1]] = tmp_b;
+    if (markers[b] == 1) {
+      index[position[b]] = tmp_b;
       atomic_add(&len, 1);
     }
   }
