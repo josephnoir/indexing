@@ -9,25 +9,25 @@
 
 // Processing steps
 void sort_rids_by_value(global uint* input, global  uint* rids,
-                        size_t idx, size_t total);
+                        size_t li, size_t work_size);
 void produce_chunck_id_literals(global uint* rids, global uint* chids,
-                                global uint* lits, size_t idx, size_t total);
+                                global uint* lits, size_t li, size_t work_size);
 size_t merged_lit_by_val_chids(global uint* input, global uint* chids,
-                               global uint* lits, size_t idx, size_t total);
+                               global uint* lits, size_t li, size_t work_size);
 void produce_fills(global uint* input, global uint* chids,
-                   size_t idx, size_t total);
+                   size_t li, size_t work_size);
 size_t fuse_fill_literals(global uint* chids, global uint* lits,
-                          global uint* index, size_t idx, size_t total);
+                          global uint* index, size_t li, size_t work_size);
 size_t compute_colum_length(global uint* input, global uint* chids,
-                            global uint* offsets, size_t idx, size_t total);
+                            global uint* offsets, size_t li, size_t work_size);
 
 // helper functions
 void parallel_selection_sort(global uint* key, global uint* data,
-                             size_t idx, size_t total);
+                             size_t li, size_t work_size);
 size_t reduce_by_key_OR(global uint* keys_high, global uint* keys_low,
-                        global uint* data, size_t idx, size_t total);
+                        global uint* data, size_t li, size_t work_size);
 size_t reduce_by_key_SUM(global uint* keys, local uint* data,
-                         size_t idx, size_t total);
+                         size_t li, size_t work_size);
 
 // main kernel
 kernel void kernel_wah_index(global uint* config,
@@ -37,125 +37,107 @@ kernel void kernel_wah_index(global uint* config,
                              global uint* rids,
                              global uint* chids,
                              global uint* lits) {
-  // just 1 dimension here: 0
-  size_t total = get_global_size(0);
-  size_t idx = get_global_id(0);
-  if (total > WORK_GROUP_SIZE) {
-    offsets[idx] = total;
-    index[idx] = WORK_GROUP_SIZE;
-    return;
+  // config structure:
+  // config[0] : amount of values to process
+  // config[1] : number of work groups
+  // config[wg index + 2]     : input length for work group
+  // config[wg index + 2 + 1] : index length for work group
+  // One-dimensional array here, only dim 0
+  // uint num_total = get_global_size(0);
+  uint num_local = get_local_size(0);
+  // uint gi = get_global_id(0); // global index
+  uint li = get_local_id(0);  // local index
+  uint wg = get_group_id(0);  // work group index
+  uint cfg_pos   = (wg * 2) + 2;
+  uint num_wg    = config[1];
+  uint work_size = config[cfg_pos];
+  uint offset    = wg * num_local;
+  // acquire pointers to the memory regions for this work group
+  global uint* work_input   = input   + offset;
+  global uint* work_index   = index   + (offset * 2);
+  global uint* work_offsets = offsets + offset;
+  global uint* work_rids    = rids    + offset;
+  global uint* work_chids   = chids   + offset;
+  global uint* work_lits    = lits    + offset;
+  // Process local blocks, 1 work-item per value
+  if (li < work_size && wg < num_wg) {
+    sort_rids_by_value(work_input, work_rids, li, work_size);
+    barrier(FENCE_TYPE);
+    produce_chunck_id_literals(work_rids, work_chids, work_lits, li, work_size);
+    barrier(FENCE_TYPE);
+    size_t k = merged_lit_by_val_chids(work_input, work_chids, work_lits, li, work_size);
+    barrier(FENCE_TYPE);
+    produce_fills(work_input, work_chids, li, k);
+    barrier(FENCE_TYPE);
+    uint length = fuse_fill_literals(work_chids, work_lits, work_index, li, k);
+    barrier(FENCE_TYPE);
+    uint keycnt = compute_colum_length(work_input, work_chids, work_offsets, li, k);
+    barrier(FENCE_TYPE);
+    config[cfg_pos    ] = keycnt;
+    config[cfg_pos + 1] = length;
   }
-  // CONSIDERATIONS:
-  // * some scaling state of the are functions required
-  //  - sorting
-  //  - scan
-  //  - stream compaction
-  //  - reduce by key
-  // * when do we need barriers?
-  //  - at the end of functions, before return?
-  //  - can be just assign return values to global stuff
-  //  - ...
-
-  // read config data
-  // uint input_size       = config[0];
-  // uint index_size       = config[1]; should be 2* input size
-  // uint processed_ values = config[2];
-
-  // Currently 1 work item per value
-  total = config[0];
-
-  //__gloabl uint[index_size] rids;
-  sort_rids_by_value(input, rids, idx, total);
-  barrier(FENCE_TYPE);
-  //index[idx] = rids[idx];
-  //offsets[idx] = 0;
-  //config[4] = total;
-  produce_chunck_id_literals(rids, chids, lits, idx, total);
-  barrier(FENCE_TYPE);
-  //input[idx] = rids[idx];
-  //index[idx] = chids[idx];
-  //offsets[idx] = lits[idx];
-  //config[4] = total;
-  size_t k = merged_lit_by_val_chids(input, chids, lits, idx, total);
-  barrier(FENCE_TYPE);
-  //index[idx] = chids[idx];
-  //offsets[idx] = lits[idx];
-  //config[3] = (uint) k;
-  //config[4] = (uint) k;
-  //config[5] = (uint) k;
-  produce_fills(input, chids, idx, k);
-  barrier(FENCE_TYPE);
-  //config[1] = k;
-  //index[idx] = chids[idx];
-  //offsets[idx] = lits[idx];
-  uint idxlen = fuse_fill_literals(chids, lits, index, idx, k);
-  barrier(FENCE_TYPE);
-  config[1] = idxlen;
-  uint keycnt = compute_colum_length(input, chids, offsets, idx, k);
-  barrier(FENCE_TYPE);
-  config[0] = keycnt;
 }
 
 void sort_rids_by_value(global uint* input,global uint* rids,
-                        size_t idx, size_t total) {
-  rids[idx] = idx;
+                        size_t li, size_t work_size) {
+  rids[li] = li;
   barrier(FENCE_TYPE); // is this needed here?
   // sort by input value
-  parallel_selection_sort(input, rids, idx, total);
+  parallel_selection_sort(input, rids, li, work_size);
 }
 
 void produce_chunck_id_literals(global uint* rids, global uint* chids,
-                                global uint* lits, size_t idx, size_t total) {
-  (void) total;
-  lits[idx] = 1u << (rids[idx] % 31u);
-  lits[idx] |= 1u << 31;
-  chids[idx] = (uint) rids[idx] / 31;
+                                global uint* lits, size_t li, size_t work_size) {
+  (void) work_size;
+  lits[li] = 1u << (rids[li] % 31u);
+  lits[li] |= 1u << 31;
+  chids[li] = (uint) rids[li] / 31;
 }
 
 size_t merged_lit_by_val_chids(global uint* input, global uint* chids,
-                               global uint* lits, size_t idx, size_t total) {
+                               global uint* lits, size_t li, size_t work_size) {
   // avoid merge of chids and input into keys,
   // simply pass them both
-  size_t k = reduce_by_key_OR(chids, input, lits, idx, total);
+  size_t k = reduce_by_key_OR(chids, input, lits, li, work_size);
   return k;
 }
 
 void produce_fills(global uint* input, global uint* chids,
-                   size_t idx, size_t total) {
-  uint tmp = chids[idx];
-  if (idx != 0 && input[idx] == input[idx - 1]) {
-    tmp = chids[idx] - chids[idx - 1] - 1;
+                   size_t li, size_t work_size) {
+  uint tmp = chids[li];
+  if (li != 0 && input[li] == input[li - 1]) {
+    tmp = chids[li] - chids[li - 1] - 1;
   }
   // This branch leads to loss of fills at the beginning of
-  // a bitmap index. 
+  // a bitmap index.
   /* else {
-    if (chids[idx] != 0) {
-      chids[idx] = chids[idx] - 1;
+    if (chids[li] != 0) {
+      chids[li] = chids[li] - 1;
     }
   }*/
   barrier(FENCE_TYPE);
-  chids[idx] = tmp;
+  chids[li] = tmp;
 }
 
 size_t fuse_fill_literals(global uint* chids, global uint* lits,
-                          global uint* index, size_t idx, size_t total) {
+                          global uint* index, size_t li, size_t work_size) {
   local uint markers [WORK_GROUP_SIZE * 2];
   local uint position[WORK_GROUP_SIZE * 2];
   volatile local int len;
   len = 0;
-  uint a =  2 * idx;
-  uint b = (2 * idx) + 1;
-  index[a] = chids[idx];
-  index[b] = lits[idx];
+  uint a =  2 * li;
+  uint b = (2 * li) + 1;
+  index[a] = chids[li];
+  index[b] = lits[li];
   barrier(FENCE_TYPE);
   // stream compaction
   markers[a] = index[a] != 0; // ? 1 : 0;
   markers[b] = index[b] != 0; // ? 1 : 0;
   barrier(FENCE_TYPE);
   // should be a parallel scan
-  if (idx == 0) {
+  if (li == 0) {
     position[0] = 0;
-    for (uint i = 1; i < (2 * total); ++i) {
+    for (uint i = 1; i < (2 * work_size); ++i) {
       position[i] = position[i - 1] + markers[i - 1];
     }
   }
@@ -163,7 +145,7 @@ size_t fuse_fill_literals(global uint* chids, global uint* lits,
   uint tmp_a = index[a];
   uint tmp_b = index[b];
   barrier(FENCE_TYPE);
-  if (idx < total) {
+  if (li < work_size) {
     if (markers[a] == 1) {
       index[position[a]] = tmp_a;
       atomic_add(&len, 1);
@@ -181,14 +163,14 @@ size_t fuse_fill_literals(global uint* chids, global uint* lits,
 }
 
 size_t compute_colum_length(global uint* input, global uint* chids,
-                            global uint* offsets, size_t idx, size_t k) {
+                            global uint* offsets, size_t li, size_t k) {
   local uint tmp[WORK_GROUP_SIZE];
-  tmp[idx] = (1 + (chids[idx] != 0)); // ? 0 : 1));
+  tmp[li] = (1 + (chids[li] != 0)); // ? 0 : 1));
   barrier(FENCE_TYPE);
-  uint keycnt = reduce_by_key_SUM(input, tmp, idx, k);
+  uint keycnt = reduce_by_key_SUM(input, tmp, li, k);
   // inclusive scan to create offsets, should be parallel
   barrier(FENCE_TYPE);
-  if (idx == 0) {
+  if (li == 0) {
     offsets[0] = 0;
     for (uint i = 1; i < keycnt; ++i) {
       offsets[i] = offsets[i - 1] + tmp[i - 1];
@@ -200,30 +182,30 @@ size_t compute_colum_length(global uint* input, global uint* chids,
 
 // Helper functions
 
-// we have 64 bit keys consisting of (high << 32 | low), but want to 
+// we have 64 bit keys consisting of (high << 32 | low), but want to
 // avoid the extra copy, so ...
 size_t reduce_by_key_OR(global uint* keys_high, global uint* keys_low,
-                        global uint* data, size_t idx, size_t total) {
+                        global uint* data, size_t li, size_t work_size) {
   local uint heads[WORK_GROUP_SIZE];
   volatile local int k;
-  heads[idx] = (idx == 0) ||
-               (keys_high[idx] != keys_high[idx - 1]) ||
-               (keys_low [idx] != keys_low [idx - 1]);
+  heads[li] = (li == 0) ||
+               (keys_high[li] != keys_high[li - 1]) ||
+               (keys_low [li] != keys_low [li - 1]);
   barrier(FENCE_TYPE);
-  if (heads[idx] != 0) {
-    uint val = data[idx];
-    uint curr = idx + 1;
-    while (heads[curr] == 0 && curr < total) {
+  if (heads[li] != 0) {
+    uint val = data[li];
+    uint curr = li + 1;
+    while (heads[curr] == 0 && curr < work_size) {
       val |= data[curr]; // OR operation
       curr += 1;
     }
     atomic_add(&k, 1);
-    data[idx] = val;
+    data[li] = val;
   }
   barrier(FENCE_TYPE);
-  if (idx == 0) {
+  if (li == 0) {
     uint pos = 0;
-    for (uint i = 0; i < total; ++i) {
+    for (uint i = 0; i < work_size; ++i) {
       if (heads[i] != 0) {
         keys_high[pos] = keys_high[i];
         keys_low[pos] = keys_low[i];
@@ -236,25 +218,25 @@ size_t reduce_by_key_OR(global uint* keys_high, global uint* keys_low,
 }
 
 size_t reduce_by_key_SUM(global uint* keys, local uint* data,
-                         size_t idx, size_t total) {
+                         size_t li, size_t work_size) {
   local uint heads[WORK_GROUP_SIZE];
-  heads[idx] = idx == 0 || (keys[idx] != keys[idx - 1]);
+  heads[li] = li == 0 || (keys[li] != keys[li - 1]);
   volatile local int k;
   barrier(FENCE_TYPE);
-  if (heads[idx] != 0 && idx < total) {
-    uint val = data[idx];
-    uint curr = idx + 1;
-    while (heads[curr] == 0 && curr < total) {
+  if (heads[li] != 0 && li < work_size) {
+    uint val = data[li];
+    uint curr = li + 1;
+    while (heads[curr] == 0 && curr < work_size) {
       val += data[curr]; // SUM operation
       curr += 1;
     }
     atomic_add(&k, 1);
-    data[idx] = val;
+    data[li] = val;
   }
   barrier(FENCE_TYPE);
-  if (idx == 0) {
+  if (li == 0) {
     uint pos = 0;
-    for (uint i = 0; i < total; ++i) {
+    for (uint i = 0; i < work_size; ++i) {
       if (heads[i] != 0) {
         keys[pos] = keys[i];
         data[pos] = data[i];
@@ -299,18 +281,17 @@ size_t reduce_by_key_SUM(global uint* keys, local uint* data,
  **/
 
 void parallel_selection_sort(global uint* key, global uint* data,
-                             size_t idx, size_t total) {
-  uint key_value = key[idx];
-  uint data_value = data[idx];
+                             size_t li, size_t work_size) {
+  uint key_value = key[li];
+  uint data_value = data[li];
   // Compute position of in[i] in output
   int pos = 0;
-  for (size_t j = 0; j < total; ++j) {
+  for (size_t j = 0; j < work_size; ++j) {
     uint curr = key[j]; // broadcasted
-    bool smaller = (curr < key_value) || (curr == key_value && j < idx);
+    bool smaller = (curr < key_value) || (curr == key_value && j < li);
     pos += (smaller) ? 1 : 0;
   }
   barrier(CLK_LOCAL_MEM_FENCE);
   key[pos] = key_value;
   data[pos] = data_value;
 }
-

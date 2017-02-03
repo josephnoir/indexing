@@ -314,8 +314,8 @@ void caf_main(actor_system&, const config& cfg) {
   auto index_length = fuse_fill_literals(chids, lits, index, k);
   vector<uint32_t> offsets(k);
   auto keycnt = compute_colum_length(input, chids, offsets, k);
-  //cout << "Index has " << index_length << " elements with "
-  //     << keycnt << " keys" << endl;
+  cout << "Index has " << index_length << " elements with "
+      << keycnt << " keys" << endl;
   if (cfg.print_results) {
     uint32_t next = 0;
     for (size_t i = 0; i < keycnt; ++i) {
