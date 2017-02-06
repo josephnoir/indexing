@@ -15,20 +15,50 @@ if ("${CMAKE_SOURCE_DIR}" STREQUAL "${CMAKE_BINARY_DIR}")
                         "initialize the build configuration.")
 endif ()
 
-# check if the user provided CXXFLAGS on the command line
-if (CMAKE_CXX_FLAGS)
-  set(CXXFLAGS_PROVIDED true)
-else()
-  set(CMAKE_CXX_FLAGS "-std=c++14 -Wextra -Wall -pedantic -O3")
-endif ()
+if(CAF_ENABLE_ADDRESS_SANITIZER)
+  # check whether address sanitizer is available
+  set(CXXFLAGS_BACKUP "${CMAKE_CXX_FLAGS}")
+  set(CMAKE_CXX_FLAGS "-fsanitize=address -fno-omit-frame-pointer")
+  try_run(ProgramResult
+          CompilationSucceeded
+          "${CMAKE_CURRENT_BINARY_DIR}"
+          "${CMAKE_CURRENT_SOURCE_DIR}/cmake/get_compiler_version.cpp")
+  if(NOT CompilationSucceeded)
+    message(WARNING "Address Sanitizer is not available on selected compiler")
+  else()
+    message(STATUS "Enable Address Sanitizer")
+    set(EXTRA_FLAGS "${EXTRA_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
+  endif()
+  # restore CXX flags
+  set(CMAKE_CXX_FLAGS "${CXXFLAGS_BACKUP}")
+endif(CAF_ENABLE_ADDRESS_SANITIZER)
 
-# set build type (evaluate ENABLE_DEBUG flag)
-if (ENABLE_DEBUG)
-  set(CMAKE_BUILD_TYPE Debug)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DCPPA_DEBUG")
-else ()
+# check if the user provided CXXFLAGS, set defaults otherwise
+if(NOT CMAKE_CXX_FLAGS)
+  set(CMAKE_CXX_FLAGS                   "-std=c++14 -Wextra -Wall -pedantic ${EXTRA_FLAGS}")
+endif()
+if(NOT CMAKE_CXX_FLAGS_DEBUG)
+  set(CMAKE_CXX_FLAGS_DEBUG             "-O0 -g")
+endif()
+if(NOT CMAKE_CXX_FLAGS_MINSIZEREL)
+  set(CMAKE_CXX_FLAGS_MINSIZEREL        "-Os")
+endif()
+if(NOT CMAKE_CXX_FLAGS_RELEASE)
+  set(CMAKE_CXX_FLAGS_RELEASE           "-O3 -DNDEBUG")
+endif()
+if(NOT CMAKE_CXX_FLAGS_RELWITHDEBINFO)
+  set(CMAKE_CXX_FLAGS_RELWITHDEBINFO    "-O2 -g")
+endif()
+
+# set build default build type to RelWithDebInfo if not set
+if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RelWithDebInfo)
-endif ()
+endif()
+
+string(TOUPPER "${CMAKE_BUILD_TYPE}" UPPER_BUILD_TYPE)
+set(ALL_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${UPPER_BUILD_TYPE}}")
+
+message(STATUS "CXX_FLAGS: ${ALL_CXX_FLAGS}")
 
 # set(CAF_ROOT_DIR "/Users/noir/Git/actor-framework/build")
 find_package(CAF COMPONENTS core io opencl)
