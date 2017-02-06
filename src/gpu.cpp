@@ -317,7 +317,7 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // create GPU worker
   auto& mngr = system.opencl_manager();
-  auto opt = mngr.get_device_if([&](const device& dev){
+  auto opt = mngr.get_device_if([&](const device& dev) {
       if (cfg.device_name.empty())
         return true;
       return dev.get_name() == cfg.device_name;

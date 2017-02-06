@@ -1,3 +1,4 @@
+#include <cmath>
 #include <vector>
 #include <random>
 #include <numeric>
@@ -23,9 +24,6 @@ namespace {
 
 constexpr const char* kernel_name = "kernel_wah_index";
 constexpr const char* kernel_file = "kernel_wah_bitindex.cl";
-
-} // namespace <anonymous>
-
 
 class config : public actor_system_config {
 public:
@@ -55,6 +53,8 @@ void eval_err(cl_int err, string msg = "") {
   else
     cout << "DONE" << endl;
 }
+
+} // namespace <anonymous>
 
 void caf_main(actor_system& system, const config& cfg) {
 
@@ -104,7 +104,7 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // find up to two available platforms
   cout << "Getting platform id(s) ..." << flush;
-  cl_uint num_platforms;
+  uint32_t num_platforms;
   err = clGetPlatformIDs(0, nullptr, &num_platforms);
   vector<cl_platform_id> platform_ids(num_platforms);
   err = clGetPlatformIDs(platform_ids.size(), platform_ids.data(),
@@ -113,7 +113,7 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // find gpu devices on our platform
   int platform_used = 0;
-  cl_uint num_gpu_devices = 0;
+  uint32_t num_gpu_devices = 0;
   err = clGetDeviceIDs(platform_ids[platform_used], CL_DEVICE_TYPE_GPU, 0,
                        nullptr, &num_gpu_devices);
   if (err != CL_SUCCESS) {
@@ -121,9 +121,9 @@ void caf_main(actor_system& system, const config& cfg) {
            << platform_ids[platform_used] << "'." << endl;
       return;
   }
-  cl_device_id gpu_devices[num_gpu_devices];
+  vector<cl_device_id> gpu_devices(num_gpu_devices);
   err = clGetDeviceIDs(platform_ids[platform_used], CL_DEVICE_TYPE_GPU,
-                       num_gpu_devices, gpu_devices, nullptr);
+                       num_gpu_devices, gpu_devices.data(), nullptr);
   if (err != CL_SUCCESS) {
       cout << "[!!!] Error getting CL_DEVICE_TYPE_GPU for platform '"
            << platform_ids[platform_used] << "'." << endl;
@@ -134,12 +134,12 @@ void caf_main(actor_system& system, const config& cfg) {
   int device_used{0};
   bool found = false;
   if (cfg.device_name.empty()) {
-    for (cl_uint i = 0; i < num_gpu_devices; ++i) {
+    for (uint32_t i = 0; i < num_gpu_devices; ++i) {
       size_t return_size;
-      err = clGetPlatformInfo(gpu_devices[i], CL_DEVICE_NAME, 0, nullptr, 
+      err = clGetDeviceInfo(gpu_devices[i], CL_DEVICE_NAME, 0, nullptr, 
                               &return_size);
       vector<char> name(return_size);
-      err = clGetPlatformInfo(gpu_devices[i], CL_DEVICE_NAME, return_size,
+      err = clGetDeviceInfo(gpu_devices[i], CL_DEVICE_NAME, return_size,
                               name.data(), 
                               &return_size);
       if (string(name.data()) == cfg.device_name) {
@@ -155,13 +155,12 @@ void caf_main(actor_system& system, const config& cfg) {
     return;
   }
   cl_device_id device_id_used = gpu_devices[device_used];
-  cout << "Using device: '" << device_id_used << "'." << endl;
+  size_t max_work_group_size;
+  err = clGetDeviceInfo(device_id_used, CL_DEVICE_MAX_WORK_GROUP_SIZE,
+                        sizeof(size_t), &max_work_group_size, NULL);
 
   // create a context
-  auto pfn_notify = [](const char *errinfo,
-                       const void *,
-                       size_t,
-                       void *) {
+  auto pfn_notify = [](const char *errinfo, const void *, size_t, void *) {
       std::cerr << "\n##### Error message via pfn_notify #####\n"
                 << string(errinfo)
                 << "\n########################################";
@@ -181,14 +180,15 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // create program object from kernel source
   cout << "Creating program object from source ... " << flush; 
-  size_t kernel_source_length = strlen(source_contents);
-  cl_program program = clCreateProgramWithSource(context, 1, &kernel_source_ptr,
-                                                 &source_contents.size(), &err);
+  const char* strings = source_contents.c_str();
+  size_t      lengths = source_contents.size();
+  cl_program program = clCreateProgramWithSource(context, 1, &strings,
+                                                 &lengths, &err);
   eval_err(err);
 
   // build programm from program object
   cout << "Building program from program object ... " << flush;
-  err = clBuildProgram(program, 0, nullptr, "-cl-kernel-arg-info", nullptr,
+  err = clBuildProgram(program, 0, nullptr, "", nullptr,
                        nullptr);
   eval_err(err);
 
@@ -196,144 +196,128 @@ void caf_main(actor_system& system, const config& cfg) {
   // create kernel
   cout << "Creating kernel object ... " << flush;
   cl_kernel kernel = clCreateKernel(program, kernel_name, &err);
-  eval_err(err); 
+  eval_err(err);
 
-  // get kernel info
-  cout << "Getting kernel information" << endl;
-  size_t kernel_info_size;
-  std::vector<char> kernel_info_buffer;
-  cout << "Getting CL_KERNEL_FUNCTION_NAME ... " << flush;
-  err = clGetKernelInfo(kernel, CL_KERNEL_FUNCTION_NAME, 0, nullptr, 
-                        &kernel_info_size);
-  kernel_info_buffer.resize(kernel_info_size);
-  err = clGetKernelInfo(kernel, CL_KERNEL_FUNCTION_NAME, kernel_info_size,
-                        kernel_info_buffer.data(), nullptr);
-  eval_err(err);
-  cout << "> " << kernel_info_buffer.data() << endl;
-  kernel_info_buffer.clear();
-  cout << "Getting CL_KERNEL_ATTRIBUTES ... " << flush;
-  err = clGetKernelInfo(kernel, CL_KERNEL_ATTRIBUTES, 0, nullptr,
-                        &kernel_info_size);
-  kernel_info_buffer.resize(kernel_info_size);
-  err = clGetKernelInfo(kernel, CL_KERNEL_ATTRIBUTES, kernel_info_size,
-                        kernel_info_buffer.data(), nullptr);
-  eval_err(err);
-  cout << "> " << kernel_info_buffer.data() << endl;
-  cout << "Getting CL_KERNEL_NUM_ARGS ... " << flush;
-  cl_uint number_of_arguments;
-  err = clGetKernelInfo(kernel, CL_KERNEL_NUM_ARGS, sizeof(cl_uint),
-                        &number_of_arguments, nullptr);
-  eval_err(err);
-  cout << "> " << number_of_arguments << endl;
+  auto batch_size = min(cfg.batch_size, static_cast<uint32_t>(values.size()));
+  auto wg_size = min(batch_size, static_cast<uint32_t>(max_work_group_size));
+  auto wg_num = cfg.work_groups;
+  auto remaining = static_cast<uint32_t>(values.size());
+  while (remaining > 0) {
+    auto arg_size = min(remaining, wg_num * wg_size);
+    vector<uint32_t> input{make_move_iterator(begin(values)),
+                           make_move_iterator(begin(values) + arg_size)};
+    auto full = arg_size / wg_size;
+    auto partial = arg_size - (full * wg_size);
+    vector<uint32_t> config(2 + (full * 2));
+    config[0] = arg_size;
+    config[1] = full;
+    for (uint32_t i = 0; i < full; ++i) {
+      config[2 * i + 2] = wg_size;
+      config[2 * i + 3] = wg_size * 2;
+    }
+    if (partial > 0) {
+      config[1] += 1;
+      config.emplace_back(partial);
+      config.emplace_back(partial * 2);
+    }
+    cout << "Config for " << arg_size << " values:" << endl;
+    for (size_t i = 0; i < config.size(); ++i)
+      cout << "> config[" << i << "]: " << config[i] << endl;
 
-  // get arg information
-  for (int i = 0; i < number_of_arguments; ++i) {
-      cout << "Getting CL_KERNEL_ARG_ADDRESS_QUALIFIER for arg " << i << " ... "
-           << flush;
-      cl_kernel_arg_address_qualifier qualifier;
-      err = clGetKernelArgInfo(kernel, i, CL_KERNEL_ARG_ADDRESS_QUALIFIER,
-                               sizeof(cl_kernel_arg_address_qualifier),
-                               &qualifier, nullptr);
-      eval_err(err);
-      switch(qualifier) {
-          case (CL_KERNEL_ARG_ADDRESS_GLOBAL):
-              cout << "> global" << endl;
-              break;
-          case (CL_KERNEL_ARG_ADDRESS_LOCAL):
-              cout << "> local" << endl;
-              break;
-          case (CL_KERNEL_ARG_ADDRESS_CONSTANT):
-              cout << "> constant" << endl;
-              break;
-          case (CL_KERNEL_ARG_ADDRESS_PRIVATE):
-              cout << "> private" << endl;
-              break;
-      }
+    // create input buffers
+    
+    values.erase(begin(values), begin(values) + batch_size);
+
+    // instantiate kernel
+    // blocking flush 
+    // read values bacl
+
+/*
+    vector<cl_event> eq_events;
+
+    // create and publish buffer
+    // cout << "Creating buffer 'buffer' ... " << flush;
+    // cl_mem buffer = clCreateBuffer(context, 
+    //                                CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, 
+    //                                sizeof(int) * buffer_size, input.data(),
+    //                                &err);
+    // eval_err(err); 
+    // cout << "Creating buffer 'result' ... " << flush;
+    // cl_mem result = clCreateBuffer(context,
+    //                                CL_MEM_WRITE_ONLY, 
+    //                                sizeof(int) * result_size, nullptr, &err);
+    // eval_err(err); 
+    cout << "Creating buffer 'buffer' ... " << flush;
+    cl_mem buffer = clCreateBuffer(context, CL_MEM_READ_ONLY, 
+                                   sizeof(int) * buffer_size, nullptr, &err);
+    eval_err(err); 
+    cout << "Creating buffer 'result' ... " << flush;
+    cl_mem result = clCreateBuffer(context, CL_MEM_WRITE_ONLY, 
+                                   sizeof(int) * result_size, nullptr, &err);
+    eval_err(err); 
+
+    // copy data to GPU
+    cl_event cpy_data;
+    err = clEnqueueWriteBuffer(cmd_queue, buffer, CL_FALSE, 0, 
+                               sizeof(int) * buffer_size, input.data(), 0,
+                               nullptr, &cpy_data);
+    eq_events.push_back(cpy_data);
+
+
+    cl_event event;
+
+    // set arguments
+    cout << "Setting kernel argument 0 ... " << flush;
+    err = clSetKernelArg(kernel, 0, sizeof(cl_mem), (void*) &buffer);
+    eval_err(err);
+
+    cout << "Setting kernel argument 1 ... " << flush;
+    err = clSetKernelArg(kernel, 1, sizeof(cl_mem), (void*) &result);
+    eval_err(err); 
+    clFinish(cmd_queue);
+    
+
+    // enqueue kernel
+    cout << "Enqueueing kernel to command queue ... " << flush;
+    vector<size_t> global_work_size{global_size};
+    vector<size_t> local_work_size{local_size};
+
+    err = clEnqueueNDRangeKernel(cmd_queue, kernel, 
+                                 global_work_size.size(), 
+                                 nullptr, 
+                                 global_work_size.data(), 
+                                 local_work_size.data(), 
+                                 eq_events.size(), 
+                                 eq_events.data(),
+                                 &event);
+    clReleaseEvent(event);
+    eval_err(err); 
+    clFinish(cmd_queue);
+    
+
+    // get results from gpu
+    cout << "Reading results from results ... " << flush;
+    vector<int> output(result_size);
+    err = clEnqueueReadBuffer(cmd_queue, result, CL_TRUE, 0,
+                              sizeof(int) * result_size, output.data(), 0, 
+                              nullptr, &event);
+    clReleaseEvent(event);
+    eval_err(err); 
+
+    // clean up
+    cout << "Releasing memory ... " << flush;
+    if (kernel)    clReleaseKernel(kernel);
+    if (program)   clReleaseProgram(program);
+    if (cmd_queue) clReleaseCommandQueue(cmd_queue);
+    
+    if (buffer)    clReleaseMemObject(buffer);
+    if (result)   clReleaseMemObject(result);
+
+    if (context)   clReleaseContext(context);
+    cout << "DONE" << endl;
+*/
+    remaining = values.size();
   }
-  
-
-  // create input and output arrays
-  vector<int> input(buffer_size);
-  int n{static_cast<int>(input.capacity())};
-  generate(begin(input), end(input), [&]{ return --n; });
-
-  vector<cl_event> eq_events;
-
-  // create and publish buffer
-  // cout << "Creating buffer 'buffer' ... " << flush;
-  // cl_mem buffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(int) * buffer_size, input.data(), &err);
-  // eval_err(err); 
-  // cout << "Creating buffer 'result' ... " << flush;
-  // cl_mem result = clCreateBuffer(context, CL_MEM_WRITE_ONLY, sizeof(int) * result_size, nullptr, &err);
-  // eval_err(err); 
-  cout << "Creating buffer 'buffer' ... " << flush;
-  cl_mem buffer = clCreateBuffer(context, CL_MEM_READ_ONLY, sizeof(int) * buffer_size, nullptr, &err);
-  eval_err(err); 
-  cout << "Creating buffer 'result' ... " << flush;
-  cl_mem result = clCreateBuffer(context, CL_MEM_WRITE_ONLY, sizeof(int) * result_size, nullptr, &err);
-  eval_err(err); 
-
-  // copy data to GPU
-  cl_event cpy_data;
-  err = clEnqueueWriteBuffer(cmd_queue, buffer, CL_FALSE, 0, sizeof(int) * buffer_size, input.data(), 0, nullptr, &cpy_data);
-  eq_events.push_back(cpy_data);
-
-
-  cl_event event;
-
-  // set arguments
-  cout << "Setting kernel argument 0 ... " << flush;
-  err = clSetKernelArg(kernel, 0, sizeof(cl_mem), (void*) &buffer);
-  eval_err(err);
-
-  cout << "Setting kernel argument 1 ... " << flush;
-  err = clSetKernelArg(kernel, 1, sizeof(cl_mem), (void*) &result);
-  eval_err(err); 
-  clFinish(cmd_queue);
-  
-
-  // enqueue kernel
-  cout << "Enqueueing kernel to command queue ... " << flush;
-  vector<size_t> global_work_size{global_size};
-  vector<size_t> local_work_size{local_size};
-
-  err = clEnqueueNDRangeKernel(cmd_queue, kernel, 
-                               global_work_size.size(), 
-                               nullptr, 
-                               global_work_size.data(), 
-                               local_work_size.data(), 
-                               eq_events.size(), 
-                               eq_events.data(),
-                               &event);
-  clReleaseEvent(event);
-  eval_err(err); 
-  clFinish(cmd_queue);
-  
-
-  // get results from gpu
-  cout << "Reading results from results ... " << flush;
-  vector<int> output(result_size);
-  err = clEnqueueReadBuffer(cmd_queue, result, CL_TRUE, 0, sizeof(int) * result_size, output.data(), 0, nullptr, &event);
-  clReleaseEvent(event);
-  eval_err(err); 
-  
-  cout << "results: ";
-  for (auto& e : output) {
-      cout << e << " ";
-  }
-  cout << endl;
-
-  // clean up
-  cout << "Releasing memory ... " << flush;
-  if (kernel)    clReleaseKernel(kernel);
-  if (program)   clReleaseProgram(program);
-  if (cmd_queue) clReleaseCommandQueue(cmd_queue);
-  
-  if (buffer)    clReleaseMemObject(buffer);
-  if (result)   clReleaseMemObject(result);
-
-  if (context)   clReleaseContext(context);
-  cout << "DONE" << endl;
 }
 
 CAF_MAIN()
