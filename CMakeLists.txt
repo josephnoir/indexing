@@ -91,6 +91,9 @@ set(SOURCES_VAST
 set(SOURCE_GENERATOR
   src/generate_test_data.cpp
 )
+set(SOURCE_PLAIN
+  src/plain.cpp
+)
 file(GLOB_RECURSE HEADERS "include/*.hpp" "include/*.cl")
 
 add_executable(cpu
@@ -137,3 +140,16 @@ target_link_libraries(generator
   ${CMAKE_DL_LIBS}
   ${CAF_LIBRARY_CORE}
 )
+
+add_executable(plain
+  ${SOURCE_PLAIN}
+  ${HEADERS}
+  ${OpenCL_INCLUDE_DIRS}
+)
+target_link_libraries(plain
+  ${CMAKE_DL_LIBS}
+  ${OpenCL_LIBRARIES}
+  ${CAF_LIBRARY_CORE}
+  ${CAF_LIBRARY_IO}
+)
+
