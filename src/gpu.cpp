@@ -106,6 +106,26 @@ behavior merger(stateful_actor<bitmap_index>* self) {
       static_cast<void>(keys);
       static_cast<void>(offsets);
       static_cast<void>(index);
+      /*
+      cout << "Index has " << length << " elements with "
+          << keycnt << " keys" << endl;
+      uint32_t next = 0;
+      for (size_t i = 0; i < keycnt; ++i) {
+        auto key = keys[i];
+        auto offset = offsets[i];
+        auto len = (i == keycnt - 1) ? length         - offsets[i]
+                                     : offsets[i + 1] - offsets[i];
+        vector<uint32_t> tmp{index.begin() + offset,
+                             index.begin() + offset + len};
+        if (key != next) {
+          for (uint32_t j = next; j < key; ++j) {
+            cout << j << "\t" << endl;
+          }
+        }
+        cout << key << '\t' << decoded_bitmap(tmp) << endl;
+        next = key + 1;
+      }
+      */
       // Switch to VAST bitmap index, built in two stps,
       // first bitmaps than encoder
       for (size_t i = 0; i < keycnt; ++i) {
@@ -152,14 +172,14 @@ behavior indexer(stateful_actor<indexer_state>* self, const actor& idx_merger) {
     [=] (init_atom, actor gpu_indexer, vector<uint32_t> input,
          uint32_t jobs, uint32_t wg_num, uint32_t wg_size,
          bool print_results, uint32_t bound) {
-      self->state.idx_worker = gpu_indexer;
-      self->state.remaining = input.size();
-      self->state.input = std::move(input);
+      self->state.idx_worker  = gpu_indexer;
+      self->state.remaining   = input.size();
+      self->state.input       = std::move(input);
       self->state.in_progress = 0;
-      self->state.jobs = jobs;
-      self->state.wg_num = wg_num;
-      self->state.wg_size = wg_size;
-      self->state.bound = bound;
+      self->state.jobs        = jobs;
+      self->state.wg_num      = wg_num;
+      self->state.wg_size     = wg_size;
+      self->state.bound       = bound;
       self->send(idx_merger, init_atom::value, print_results, bound);
     },
     [=] (index_atom) {
@@ -205,7 +225,6 @@ behavior indexer(stateful_actor<indexer_state>* self, const actor& idx_merger) {
       s.remaining   -= processed;
       // split the calculated indecies into independent indexes
       // *maybe*, move this to the merger actor.
-      cout << "Used " << wg_num << " work group(s):" << endl;
       for (uint32_t i = 0; i < wg_num; ++i) {
         auto keycnt = config[2 * i + 2];
         auto length = config[2 * i + 3];
@@ -231,7 +250,6 @@ behavior indexer(stateful_actor<indexer_state>* self, const actor& idx_merger) {
     }
   };
 }
-
 } // namespace <anonymous>
 
 class config : public actor_system_config {
@@ -324,10 +342,13 @@ void caf_main(actor_system& system, const config& cfg) {
   auto normal_size = [](const vector<uint32_t>&, const vector<uint32_t>& in) {
     return in.size();
   };
+  cout << "Creating OpenCL actor with (" << gl_size << ", 1, 1) work items "
+          "distributed in work groups in batches of (" << wg_size << ", 1, 1)"
+       << endl;
   auto worker = system.opencl_manager().spawn(
     mngr.create_program(source_contents.c_str(), "", dev),
     kernel_name,
-    spawn_config{dim_vec{gl_size}, dim_vec{wg_size}},
+    spawn_config{dim_vec{gl_size}, {}, dim_vec{wg_size}},
     in_out<vector<uint32_t>>{},             // config
     in_out<vector<uint32_t>>{},             // input
     out<vector<uint32_t>>{double_size},     // index
