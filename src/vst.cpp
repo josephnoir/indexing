@@ -42,7 +42,7 @@ public:
 };
 
 void caf_main(actor_system&, const config& cfg) {
-  vector<uint32_t> values;
+  std::vector<uint32_t> values;
   if (cfg.filename.empty()) {
     values = {10,  7, 22,  6,  7,  1,  9, 42,  2,  5,
               13,  3,  2,  1,  0,  1, 18, 18,  3, 13,
