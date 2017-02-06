@@ -49,7 +49,7 @@ kernel void kernel_wah_index(global uint* config,
   uint li = get_local_id(0);  // local index
   uint wg = get_group_id(0);  // work group index
   uint cfg_pos   = (wg * 2) + 2;
-  uint num_wg    = config[1];
+  uint num_wg    = config[1]; // should be <= get_num_groups(0)
   uint work_size = config[cfg_pos];
   uint offset    = wg * num_local;
   // acquire pointers to the memory regions for this work group
