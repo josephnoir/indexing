@@ -207,9 +207,9 @@ behavior indexer(stateful_actor<indexer_state>* self, const actor& idx_merger) {
         config.emplace_back(partial);
         config.emplace_back(partial * 2);
       }
-      cout << "Config for " << batch_size << " values:" << endl;
-      for (size_t i = 0; i < config.size(); ++i)
-        cout << "> config[" << i << "]: " << config[i] << endl;
+      //cout << "Config for " << batch_size << " values:" << endl;
+      //for (size_t i = 0; i < config.size(); ++i)
+      //  cout << "> config[" << i << "]: " << config[i] << endl;
       // send both matrices to the actor and wait for a result
       self->send(s.idx_worker, std::move(config), move(input));
       s.input.erase(begin(s.input), begin(s.input) + batch_size);
@@ -342,9 +342,9 @@ void caf_main(actor_system& system, const config& cfg) {
   auto normal_size = [](const vector<uint32_t>&, const vector<uint32_t>& in) {
     return in.size();
   };
-  cout << "Creating OpenCL actor with (" << gl_size << ", 1, 1) work items "
-          "distributed in work groups in batches of (" << wg_size << ", 1, 1)"
-       << endl;
+  //cout << "Creating OpenCL actor with (" << gl_size << ", 1, 1) work items "
+  //        "distributed in work groups in batches of (" << wg_size << ", 1, 1)"
+  //     << endl;
   auto worker = system.opencl_manager().spawn(
     mngr.create_program(source_contents.c_str(), "", dev),
     kernel_name,
