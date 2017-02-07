@@ -65,13 +65,15 @@ kernel void kernel_wah_index(global uint* config,
     barrier(FENCE_TYPE);
     produce_chunck_id_literals(work_rids, work_chids, work_lits, li, work_size);
     barrier(FENCE_TYPE);
-    size_t k = merged_lit_by_val_chids(work_input, work_chids, work_lits, li, work_size);
+    size_t k = merged_lit_by_val_chids(work_input, work_chids, work_lits, li,
+                                       work_size);
     barrier(FENCE_TYPE);
     produce_fills(work_input, work_chids, li, k);
     barrier(FENCE_TYPE);
     uint length = fuse_fill_literals(work_chids, work_lits, work_index, li, k);
     barrier(FENCE_TYPE);
-    uint keycnt = compute_colum_length(work_input, work_chids, work_offsets, li, k);
+    uint keycnt = compute_colum_length(work_input, work_chids, work_offsets,
+                                       li, k);
     barrier(FENCE_TYPE);
     config[cfg_pos    ] = keycnt;
     config[cfg_pos + 1] = length;
@@ -133,11 +135,12 @@ size_t fuse_fill_literals(global uint* chids, global uint* lits,
   // stream compaction
   markers[a] = index[a] != 0; // ? 1 : 0;
   markers[b] = index[b] != 0; // ? 1 : 0;
+  position[a] = 0;
+  position[b] = 0;
   barrier(FENCE_TYPE);
   // should be a parallel scan
   if (li == 0) {
-    position[0] = 0;
-    for (uint i = 1; i < (2 * work_size); ++i) {
+    for (uint i = 1; i < WORK_GROUP_SIZE * 2; ++i) {
       position[i] = position[i - 1] + markers[i - 1];
     }
   }
@@ -163,15 +166,15 @@ size_t fuse_fill_literals(global uint* chids, global uint* lits,
 }
 
 size_t compute_colum_length(global uint* input, global uint* chids,
-                            global uint* offsets, size_t li, size_t k) {
+                            global uint* offsets, size_t li, size_t work_size) {
   local uint tmp[WORK_GROUP_SIZE];
   tmp[li] = (1 + (chids[li] != 0)); // ? 0 : 1));
   barrier(FENCE_TYPE);
-  uint keycnt = reduce_by_key_SUM(input, tmp, li, k);
+  uint keycnt = reduce_by_key_SUM(input, tmp, li, work_size);
   // inclusive scan to create offsets, should be parallel
+  offsets[li] = 0;
   barrier(FENCE_TYPE);
   if (li == 0) {
-    offsets[0] = 0;
     for (uint i = 1; i < keycnt; ++i) {
       offsets[i] = offsets[i - 1] + tmp[i - 1];
     }
@@ -188,9 +191,10 @@ size_t reduce_by_key_OR(global uint* keys_high, global uint* keys_low,
                         global uint* data, size_t li, size_t work_size) {
   local uint heads[WORK_GROUP_SIZE];
   volatile local int k;
+  k = 0;
   heads[li] = (li == 0) ||
-               (keys_high[li] != keys_high[li - 1]) ||
-               (keys_low [li] != keys_low [li - 1]);
+              (keys_high[li] != keys_high[li - 1]) ||
+              (keys_low [li] != keys_low [li - 1]);
   barrier(FENCE_TYPE);
   if (heads[li] != 0) {
     uint val = data[li];
@@ -220,8 +224,12 @@ size_t reduce_by_key_OR(global uint* keys_high, global uint* keys_low,
 size_t reduce_by_key_SUM(global uint* keys, local uint* data,
                          size_t li, size_t work_size) {
   local uint heads[WORK_GROUP_SIZE];
-  heads[li] = li == 0 || (keys[li] != keys[li - 1]);
   volatile local int k;
+  k = 0;
+  //heads[li] = 0;
+  //if ((li == 0) || (keys[li] != keys[li - 1]))
+  //  heads[li] = 1;
+  heads[li] = (li == 0) || (keys[li] != keys[li - 1]);
   barrier(FENCE_TYPE);
   if (heads[li] != 0 && li < work_size) {
     uint val = data[li];
