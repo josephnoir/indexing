@@ -17,6 +17,8 @@
 
 #include "caf/all.hpp"
 #include "caf/opencl/all.hpp"
+#include "caf/opencl/mem_ref.hpp"
+#include "caf/opencl/actor_facade_phase.hpp"
 
 using namespace std;
 using namespace std::chrono;
@@ -26,7 +28,7 @@ using namespace caf::opencl;
 // required to allow sending mem_ref<int> in messages
 namespace caf {
   template <>
-  struct allowed_unsafe_message_type<mem_ref<int>> : std::true_type {};
+  struct allowed_unsafe_message_type<mem_ref<uint32_t>> : std::true_type {};
 }
 
 namespace {
@@ -96,7 +98,6 @@ string decoded_bitmap(const vector<uint32_t>& bitmap) {
 }
 */
 
-
 } // namespace <anonymous>
 
 class config : public actor_system_config {
@@ -110,7 +111,8 @@ public:
     opt_group{custom_options_, "global"}
     .add(filename, "data-file,f", "file with test data (one value per line)")
     .add(bound, "bound,b", "maximum value (0 will scan values)")
-    .add(device_name, "device,d", "device for computation (GeForce GTX 780M)")
+    .add(device_name, "device,d", "device for computation (GeForce GTX 780M, "
+                      "empty string will take first available device)")
     .add(print_results, "print,p", "print resulting bitmap index");
   }
 };
@@ -161,6 +163,12 @@ void caf_main(actor_system& system, const config& cfg) {
   auto prog_fills  = mngr.create_program_from_file(kernel_file_04, "", dev);
   auto prog_fuse   = mngr.create_program_from_file(kernel_file_05, "", dev);
   auto prog_colum  = mngr.create_program_from_file(kernel_file_06, "", dev);
+
+  // buffers
+  dev.copy_to_device(buffer_type::input_output, values);
+  dev.copy_to_device(buffer_type::scratch_space, vector<uint32_t>());
+
+  // create phases
   
   system.await_all_actors_done();
 }

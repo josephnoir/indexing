@@ -304,14 +304,14 @@ void caf_main(actor_system& system, const config& cfg) {
   ifstream read_source{filename, std::ios::in};
   string source_contents;
   if (read_source) {
-      read_source.seekg(0, std::ios::end);
-      source_contents.resize(read_source.tellg());
-      read_source.seekg(0, std::ios::beg);
-      read_source.read(&source_contents[0], source_contents.size());
-      read_source.close();
+    read_source.seekg(0, std::ios::end);
+    source_contents.resize(read_source.tellg());
+    read_source.seekg(0, std::ios::beg);
+    read_source.read(&source_contents[0], source_contents.size());
+    read_source.close();
   } else {
-      cout << strerror(errno) << "[!!!] " << endl;
-      return;
+    cout << strerror(errno) << "[!!!] " << endl;
+    return;
   }
   cout << "DONE" << endl;
 
