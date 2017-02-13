@@ -1,5 +1,6 @@
 #include <cmath>
 #include <vector>
+#include <chrono>
 #include <random>
 #include <numeric>
 #include <fstream>
@@ -48,10 +49,10 @@ public:
 
 
 void eval_err(cl_int err, string msg = "") {
-  if (err != CL_SUCCESS)
+  if (err != CL_SUCCESS) {
     cout << "[!!!] " << msg << err << endl;
-  else
-    cout << "DONE" << endl;
+    exit(err);
+  }
 }
 
 } // namespace <anonymous>
@@ -65,24 +66,20 @@ void caf_main(actor_system&, const config& cfg) {
                5,  9,  0,  3,  2, 19,  5, 23, 22, 10,
                6, 22};
   } else {
-    cout << "Reading data from '" << cfg.filename << "' ... " << flush;
     ifstream source{cfg.filename, std::ios::in};
     uint32_t next;
     while (source >> next) {
       values.push_back(next);
     }
   }
-  cout << "'" << values.size() << "' values." << endl;
   auto bound = cfg.bound;
   if (bound == 0 && !values.empty()) {
     auto itr = max_element(values.begin(), values.end());
     bound = *itr;
   }
-  cout << "Maximum value is '" << bound << "'." << endl;
 
   // read cl kernel file
   auto filename = string("./include/") + kernel_file;
-  cout << "Reading source from '" << filename << "' ... " << flush;
   ifstream read_source{filename, std::ios::in};
   string source_contents;
   if (read_source) {
@@ -95,14 +92,10 @@ void caf_main(actor_system&, const config& cfg) {
       cout << strerror(errno) << "[!!!] " << endl;
       return;
   }
-  cout << "DONE" << endl;
-
-  // #### OLD PROGRAM ####
 
   cl_int err{0};
 
   // find up to two available platforms
-  cout << "Getting platform id(s) ..." << flush;
   uint32_t num_platforms;
   err = clGetPlatformIDs(0, nullptr, &num_platforms);
   vector<cl_platform_id> platform_ids(num_platforms);
@@ -115,19 +108,11 @@ void caf_main(actor_system&, const config& cfg) {
   uint32_t num_gpu_devices = 0;
   err = clGetDeviceIDs(platform_ids[platform_used], CL_DEVICE_TYPE_GPU, 0,
                        nullptr, &num_gpu_devices);
-  if (err != CL_SUCCESS) {
-      cout << "[!!!] Error getting number of gpu devices for platform '"
-           << platform_ids[platform_used] << "'." << endl;
-      return;
-  }
+  eval_err(err);
   vector<cl_device_id> gpu_devices(num_gpu_devices);
   err = clGetDeviceIDs(platform_ids[platform_used], CL_DEVICE_TYPE_GPU,
                        num_gpu_devices, gpu_devices.data(), nullptr);
-  if (err != CL_SUCCESS) {
-      cout << "[!!!] Error getting CL_DEVICE_TYPE_GPU for platform '"
-           << platform_ids[platform_used] << "'." << endl;
-      return;
-  }
+  eval_err(err);
 
   // choose device
   int device_used{0};
@@ -142,7 +127,6 @@ void caf_main(actor_system&, const config& cfg) {
                             name.data(), &return_size);
       string as_string(name.data());
       if (as_string == cfg.device_name) {
-        cout << "Using '" << as_string << "'" << endl;
         device_used = i;
         found = true;
         break;
@@ -172,21 +156,18 @@ void caf_main(actor_system&, const config& cfg) {
                 << string(errinfo)
                 << "\n########################################";
   };
-  cout << "Creating context ... " << flush;
   cl_context context = clCreateContext(0, 1, &device_id_used, pfn_notify,
                                        nullptr, &err);
   eval_err(err);
 
 
   // create a command queue
-  cout << "Creating command queue ... " << flush;
   cl_command_queue cmd_queue = clCreateCommandQueue(context, device_id_used,
                                                     CL_QUEUE_PROFILING_ENABLE,
                                                     &err);
   eval_err(err);
 
   // create program object from kernel source
-  cout << "Creating program object from source ... " << flush;
   const char* strings = source_contents.c_str();
   size_t      lengths = source_contents.size();
   cl_program program = clCreateProgramWithSource(context, 1, &strings,
@@ -194,14 +175,12 @@ void caf_main(actor_system&, const config& cfg) {
   eval_err(err);
 
   // build programm from program object
-  cout << "Building program from program object ... " << flush;
   err = clBuildProgram(program, 0, nullptr, "", nullptr,
                        nullptr);
   eval_err(err);
 
 
   // create kernel
-  cout << "Creating kernel object ... " << flush;
   cl_kernel kernel = clCreateKernel(program, kernel_name, &err);
   eval_err(err);
 
@@ -215,12 +194,15 @@ void caf_main(actor_system&, const config& cfg) {
   auto out_flags    = CL_MEM_READ_WRITE | CL_MEM_HOST_READ_ONLY;
   auto buf_flags    = CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS;
   auto blocking = CL_FALSE;
+   auto start = chrono::high_resolution_clock::now();
   while (remaining > 0) {
     auto arg_size = min(remaining, wg_num * wg_size);
     auto arg_bytes = arg_size * sizeof(uint32_t);
     vector<uint32_t> input{
-      make_move_iterator(begin(values) + processed),
-      make_move_iterator(begin(values) + processed + arg_size)
+      begin(values) + processed,
+      begin(values) + processed + arg_size
+      //make_move_iterator(begin(values) + processed),
+      //make_move_iterator(begin(values) + processed + arg_size)
     };
     processed += arg_size;
     remaining -= arg_size;
@@ -239,52 +221,40 @@ void caf_main(actor_system&, const config& cfg) {
       config.emplace_back(partial * 2);
     }
     auto cfg_bytes = config.size() * sizeof(uint32_t);
-    cout << "Config for " << arg_size << " values:" << endl;
-    for (size_t i = 0; i < config.size(); ++i)
-      cout << "> config[" << i << "]: " << config[i] << endl;
 
     vector<cl_event> eq_events;
 
     // create input buffers
-    cout << "Creating buffer 'config' ... " << flush;
     cl_mem buf_config = clCreateBuffer(context, in_out_flags, cfg_bytes,
                                        nullptr, &err);
     eval_err(err);
-    cout << "Creating buffer 'input' ... " << flush;
     cl_mem buf_input = clCreateBuffer(context, in_out_flags, arg_bytes,
                                       nullptr, &err);
     eval_err(err);
-    cout << "Creating buffer 'index' ... " << flush;
     cl_mem buf_index = clCreateBuffer(context, out_flags, arg_bytes * 2,
                                       nullptr, &err);
     eval_err(err);
-    cout << "Creating buffer 'offsets' ... " << flush;
     cl_mem buf_offsets = clCreateBuffer(context, out_flags, arg_bytes,
                                         nullptr, &err);
     eval_err(err);
-    cout << "Creating buffer 'rids' ... " << flush;
     cl_mem buf_rids = clCreateBuffer(context, buf_flags, arg_bytes,
                                      nullptr, &err);
     eval_err(err);
-    cout << "Creating buffer 'chids' ... " << flush;
     cl_mem buf_chids = clCreateBuffer(context, buf_flags, arg_bytes,
                                       nullptr, &err);
     eval_err(err);
-    cout << "Creating buffer 'lits' ... " << flush;
     cl_mem buf_lits = clCreateBuffer(context, buf_flags, arg_bytes,
                                      nullptr, &err);
     eval_err(err);
 
     // copy data to GPU
     cl_event config_cpy;
-    cout << "Writing 'config' ... " << flush;
     err = clEnqueueWriteBuffer(cmd_queue, buf_config, blocking, 0,
                                cfg_bytes, config.data(), 0,
                                nullptr, &config_cpy);
     eval_err(err);
     eq_events.push_back(config_cpy);
     cl_event input_copy;
-    cout << "Writing 'input' ... " << flush;
     err = clEnqueueWriteBuffer(cmd_queue, buf_input, blocking, 0,
                                arg_bytes, input.data(), 0,
                                nullptr, &input_copy);
@@ -292,30 +262,22 @@ void caf_main(actor_system&, const config& cfg) {
     eq_events.push_back(input_copy);
 
     // set arguments
-    cout << "Setting kernel argument 0 ... " << flush;
     err = clSetKernelArg(kernel, 0, sizeof(cl_mem), (void*) &buf_config);
     eval_err(err);
-    cout << "Setting kernel argument 1 ... " << flush;
     err = clSetKernelArg(kernel, 1, sizeof(cl_mem), (void*) &buf_input);
     eval_err(err);
-    cout << "Setting kernel argument 2 ... " << flush;
     err = clSetKernelArg(kernel, 2, sizeof(cl_mem), (void*) &buf_index);
     eval_err(err);
-    cout << "Setting kernel argument 3 ... " << flush;
     err = clSetKernelArg(kernel, 3, sizeof(cl_mem), (void*) &buf_offsets);
     eval_err(err);
-    cout << "Setting kernel argument 4 ... " << flush;
     err = clSetKernelArg(kernel, 4, sizeof(cl_mem), (void*) &buf_rids);
     eval_err(err);
-    cout << "Setting kernel argument 5 ... " << flush;
     err = clSetKernelArg(kernel, 5, sizeof(cl_mem), (void*) &buf_chids);
     eval_err(err);
-    cout << "Setting kernel argument 6 ... " << flush;
     err = clSetKernelArg(kernel, 6, sizeof(cl_mem), (void*) &buf_lits);
     eval_err(err);
 
     // enqueue kernel
-    cout << "Enqueueing kernel to command queue ... " << flush;
     vector<size_t> global_work{gl_size};
     vector<size_t> local_work{wg_size};
     cl_event kernel_exec;
@@ -329,22 +291,18 @@ void caf_main(actor_system&, const config& cfg) {
     vector<uint32_t> keys(arg_size);
     vector<uint32_t> index(arg_size * 2);
     vector<uint32_t> offsets(arg_size);
-    cout << "Reading 'config' ... " << flush;
     err = clEnqueueReadBuffer(cmd_queue, buf_config, blocking, 0,
                               cfg_bytes, config.data(), 1,
                               &kernel_exec, nullptr);
     eval_err(err);
-    cout << "Reading 'keys' ... " << flush;
     err = clEnqueueReadBuffer(cmd_queue, buf_input, blocking, 0,
                               arg_bytes, keys.data(), 1,
                               &kernel_exec, nullptr);
     eval_err(err);
-    cout << "Reading 'index' ... " << flush;
     err = clEnqueueReadBuffer(cmd_queue, buf_index, blocking, 0,
                               arg_bytes * 2, index.data(), 1,
                               &kernel_exec, nullptr);
     eval_err(err);
-    cout << "Reading 'offsets' ... " << flush;
     err = clEnqueueReadBuffer(cmd_queue, buf_offsets, blocking, 0,
                               arg_bytes, offsets.data(), 1,
                               &kernel_exec, nullptr);
@@ -363,13 +321,15 @@ void caf_main(actor_system&, const config& cfg) {
     clReleaseMemObject(buf_chids);
     clReleaseMemObject(buf_lits);
   }
+  auto stop = chrono::high_resolution_clock::now();
   // clean up
-  cout << "Releasing memory ... " << flush;
   clReleaseKernel(kernel);
   clReleaseProgram(program);
   clReleaseCommandQueue(cmd_queue);
   clReleaseContext(context);
-  cout << "DONE" << endl;
+  cout << "Time: '"
+       << chrono::duration_cast<chrono::milliseconds>(stop - start).count()
+       << "' ms" << endl;
 }
 
 CAF_MAIN()
