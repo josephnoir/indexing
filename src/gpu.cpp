@@ -353,9 +353,9 @@ void caf_main(actor_system& system, const config& cfg) {
     in_out<vector<uint32_t>>{},             // input
     out<vector<uint32_t>>{double_size},     // index
     out<vector<uint32_t>>{normal_size},     // offsets
-    buffer<vector<uint32_t>>{normal_size},  // rids
-    buffer<vector<uint32_t>>{normal_size},  // chids
-    buffer<vector<uint32_t>>{normal_size}   // lits
+    scratch<vector<uint32_t>>{normal_size},  // rids
+    scratch<vector<uint32_t>>{normal_size},  // chids
+    scratch<vector<uint32_t>>{normal_size}   // lits
   );
 
   auto idx_merger = system.spawn(merger);

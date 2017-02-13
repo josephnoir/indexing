@@ -85,6 +85,9 @@ set(SOURCES_CPU
 set(SOURCES_GPU
   src/gpu.cpp
 )
+set(SOURCES_PHASES
+  src/phases.cpp
+)
 set(SOURCES_VAST
   src/vst.cpp
 )
@@ -113,6 +116,20 @@ add_executable(gpu
   ${CAF_INCLUDE_DIR_OPENCL}
 )
 target_link_libraries(gpu
+  ${CMAKE_DL_LIBS}
+  ${CAF_LIBRARY_CORE}
+  ${CAF_LIBRARY_IO}
+  ${CAF_LIBRARY_OPENCL}
+  ${OpenCL_LIBRARIES}
+)
+
+add_executable(phases
+  ${SOURCES_PHASES}
+  ${HEADERS}
+  ${OpenCL_INCLUDE_DIRS}
+  ${CAF_INCLUDE_DIR_OPENCL}
+)
+target_link_libraries(phases
   ${CMAKE_DL_LIBS}
   ${CAF_LIBRARY_CORE}
   ${CAF_LIBRARY_IO}

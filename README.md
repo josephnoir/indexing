@@ -30,3 +30,5 @@ This builds the following programs, each has a `--help` option that lists all co
 * [VAST](https://github.com/vast-io) (requires clang >= 3.5 or gcc >= 6)
 * C++ 14 compiler
 * OpenCL (version 1.1 or 1.2)
+
+Required OpenCL submodule branch is [topic/multi_phase_kernels](https://github.com/actor-framework/opencl/tree/topic/multi_phase_kernels).
