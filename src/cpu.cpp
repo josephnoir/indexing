@@ -175,12 +175,12 @@ void sort_rids_by_value(vector<uint32_t>& input, vector<uint32_t>& rids) {
     for (size_t j = 0; j < i; ++j) {
       if (input[j] > input[j + 1]) {
         // switch input
-        auto tmp = input[j];
-        input[j] = input[j + 1];
+        auto tmp     = input[j];
+        input[j    ] = input[j + 1];
         input[j + 1] = tmp;
         // switch rids
-        tmp = rids[j];
-        rids[j] = rids[j + 1];
+        tmp         = rids[j    ];
+        rids[j    ] = rids[j + 1];
         rids[j + 1] = tmp;
       }
     }

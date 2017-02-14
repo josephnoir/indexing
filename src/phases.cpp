@@ -33,6 +33,8 @@ namespace caf {
 
 namespace {
 
+using vec = std::vector<uint32_t>;
+
 using add_atom = atom_constant<atom("add")>;
 using init_atom = atom_constant<atom("init")>;
 using quit_atom = atom_constant<atom("quit")>;
@@ -68,7 +70,7 @@ string as_binary(T num) {
   return s.str();
 }
 
-string decoded_bitmap(const vector<uint32_t>& bitmap) {
+string decoded_bitmap(const vec& bitmap) {
   if (bitmap.empty()) {
     return "";
   }
@@ -100,6 +102,29 @@ string decoded_bitmap(const vector<uint32_t>& bitmap) {
 }
 */
 
+// For testing, TODO: DELTE THIS
+/*
+vector<uint32_t> sort_rids_by_value(vector<uint32_t>& input) {
+  vector<uint32_t> rids(input.size());
+  iota(begin(rids), end(rids), 0);
+  for (size_t i = (input.size() - 1); i > 0; --i) {
+    for (size_t j = 0; j < i; ++j) {
+      if (input[j] > input[j + 1]) {
+        // switch input
+        auto tmp     = input[j];
+        input[j    ] = input[j + 1];
+        input[j + 1] = tmp;
+        // switch rids
+        tmp         = rids[j    ];
+        rids[j    ] = rids[j + 1];
+        rids[j + 1] = tmp;
+      }
+    }
+  }
+  return rids;
+}
+*/
+
 } // namespace <anonymous>
 
 class config : public actor_system_config {
@@ -120,7 +145,7 @@ public:
 };
 
 void caf_main(actor_system& system, const config& cfg) {
-  vector<uint32_t> values;
+  vec values;
   if (cfg.filename.empty()) {
     values = {10,  7, 22,  6,  7,  1,  9, 42,  2,  5,
               13,  3,  2,  1,  0,  1, 18, 18,  3, 13,
@@ -170,59 +195,60 @@ void caf_main(actor_system& system, const config& cfg) {
   */
 
   // create spawn configuration
-  auto index_space = spawn_config{dim_vec{values.size()}};
+  auto index_space      = spawn_config{dim_vec{values.size()}};
   auto index_space_half = spawn_config{dim_vec{values.size() / 2}};
 
   // buffers for execution
-  vector<uint32_t> config{static_cast<uint32_t>(values.size()), 0, 0};
-  //auto conf_ref = dev.copy_to_device(buffer_type::input_output, config);
+  vec config{static_cast<uint32_t>(values.size())};
   auto vals_ref = dev.copy_to_device(buffer_type::input_output, values);
-  auto rids_ref = dev.copy_to_device(buffer_type::scratch_space,
-                                     vector<uint32_t>(), values.size());
+  // should be scratch space
+  auto rids_ref = dev.copy_to_device(buffer_type::output, vec(),
+                                     values.size());
   {
     // create phases
-    auto w_rids_1
-      = mngr.spawn_phase<uint32_t*, uint32_t*, uint32_t*>(prog_rids,
-                                                          "create_rids",
-                                                          index_space);
-    auto w_rids_2
-      = mngr.spawn_phase<uint32_t*, uint32_t*>(prog_rids, "ParallelBitonic_B2",
-                                               index_space_half);
+    auto w_rids_1 = mngr.spawn_phase<vec, vec, vec>(prog_rids, "create_rids",
+                                                    index_space);
+    auto w_rids_2 = mngr.spawn_phase<vec, vec, vec>(prog_rids,
+                                                    "ParallelBitonic_B2",
+                                                    index_space_half);
 
     // kernel executions
     scoped_actor self{system};
     auto conf_ref = dev.copy_to_device(buffer_type::input, config);
-    // self->send(w_rids_1, conf_ref, vals_ref, rids_ref)
-    std::vector<uint32_t> sort_conf(2);
+    self->send(w_rids_1, conf_ref, vals_ref, rids_ref);
+    self->receive(
+      [&](mem_ref<uint32_t>&, mem_ref<uint32_t>&, mem_ref<uint32_t>&) {
+        // nop
+      }
+    );
+    config.resize(2);
     for (uint32_t length = 1; length < values.size(); length <<= 1) {
       int inc = length;
       bool done = false;
-      sort_conf[0] = inc;
-      sort_conf[1] = length << 1;
-      conf_ref = dev.copy_to_device(buffer_type::input, sort_conf);
-      self->send(w_rids_2, conf_ref, vals_ref);
+      config[0] = inc;
+      config[1] = length << 1;
+      conf_ref = dev.copy_to_device(buffer_type::input, config);
+      self->send(w_rids_2, conf_ref, vals_ref, rids_ref);
       self->receive_while([&] { return !done; })(
-        [&](mem_ref<uint32_t>& conf, mem_ref<uint32_t>& vals) {
+        [&](mem_ref<uint32_t>& conf, mem_ref<uint32_t>& vals,
+            mem_ref<uint32_t>& rids) {
           inc >>= 1;
           if (inc > 0) {
-            sort_conf[0] = inc;
-            conf = dev.copy_to_device(buffer_type::input, sort_conf);
-            self->send(w_rids_2, conf, vals);
+            config[0] = inc;
+            conf = dev.copy_to_device(buffer_type::input, config);
+            self->send(w_rids_2, conf, vals, rids);
           } else {
             done = true;
           }
-        },
-        others >> [&](message_view& x) -> result<message> {
-          cout << "Unexpected message" << x.content().stringify() << endl;
-          return sec::unexpected_message;
         }
       );
     }
-    auto sorted = vals_ref.data();
-    if (sorted && is_sorted(sorted->begin(), sorted->end()))
-      cout << "Result is sorted" << endl;
-    else
-      cerr << "Something went wrong" << endl;
+
+    // test stuff
+    /*
+    vec test_keys = values;
+    vec test_vals = sort_rids_by_value(test_keys);
+    */
   }
   // clean up
   system.await_all_actors_done();
