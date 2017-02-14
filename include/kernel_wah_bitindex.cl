@@ -257,7 +257,7 @@ size_t reduce_by_key_SUM(global uint* keys, local uint* data,
 
 /**
  * Sort found on: http://www.bealto.com/gpu-sorting_intro.html
- * License:set syntax=:
+ * License:
  *  This code is released under the following license (BSD-style).
  *  --
  *

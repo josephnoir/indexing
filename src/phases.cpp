@@ -38,12 +38,14 @@ using init_atom = atom_constant<atom("init")>;
 using quit_atom = atom_constant<atom("quit")>;
 using index_atom = atom_constant<atom("index")>;
 
-constexpr const char* kernel_file_01 = "sort_rids_by_value.cl";
-constexpr const char* kernel_file_02 = "produce_chunck_id_literals.cl";
-constexpr const char* kernel_file_03 = "merge_lit_by_val_chids.cl";
-constexpr const char* kernel_file_04 = "produce_fills.cl";
-constexpr const char* kernel_file_05 = "fuse_fill_literals.cl";
-constexpr const char* kernel_file_06 = "compute_colum_length.cl";
+constexpr const char* kernel_file_01 = "./include/sort_rids_by_value.cl";
+/*
+constexpr const char* kernel_file_02 = "./include/produce_chunck_id_literals.cl";
+constexpr const char* kernel_file_03 = "./include/merge_lit_by_val_chids.cl";
+constexpr const char* kernel_file_04 = "./include/produce_fills.cl";
+constexpr const char* kernel_file_05 = "./include/fuse_fill_literals.cl";
+constexpr const char* kernel_file_06 = "./include/compute_colum_length.cl";
+*/
 
 /*
 constexpr const char* kernel_name_01a = "kernel_wah_index";
@@ -104,7 +106,7 @@ class config : public actor_system_config {
 public:
   string filename = "";
   uint32_t bound = 0;
-  string device_name = "GeForce GT 650M";
+  string device_name = "GeForce GTX 780M";
   bool print_results;
   config() {
     load<opencl::manager>();
@@ -156,20 +158,73 @@ void caf_main(actor_system& system, const config& cfg) {
   }
   auto dev = *opt;
 
+
   // load kernels
   auto prog_rids   = mngr.create_program_from_file(kernel_file_01, "", dev);
+  /*
   auto prog_chunks = mngr.create_program_from_file(kernel_file_02, "", dev);
   auto prog_merge  = mngr.create_program_from_file(kernel_file_03, "", dev);
   auto prog_fills  = mngr.create_program_from_file(kernel_file_04, "", dev);
   auto prog_fuse   = mngr.create_program_from_file(kernel_file_05, "", dev);
   auto prog_colum  = mngr.create_program_from_file(kernel_file_06, "", dev);
+  */
 
-  // buffers
-  dev.copy_to_device(buffer_type::input_output, values);
-  dev.copy_to_device(buffer_type::scratch_space, vector<uint32_t>());
+  // create spawn configuration
+  auto index_space = spawn_config{dim_vec{values.size()}};
+  auto index_space_half = spawn_config{dim_vec{values.size() / 2}};
 
-  // create phases
-  
+  // buffers for execution
+  vector<uint32_t> config{static_cast<uint32_t>(values.size()), 0, 0};
+  //auto conf_ref = dev.copy_to_device(buffer_type::input_output, config);
+  auto vals_ref = dev.copy_to_device(buffer_type::input_output, values);
+  auto rids_ref = dev.copy_to_device(buffer_type::scratch_space,
+                                     vector<uint32_t>(), values.size());
+  {
+    // create phases
+    auto w_rids_1
+      = mngr.spawn_phase<uint32_t*, uint32_t*, uint32_t*>(prog_rids,
+                                                          "create_rids",
+                                                          index_space);
+    auto w_rids_2
+      = mngr.spawn_phase<uint32_t*, uint32_t*>(prog_rids, "ParallelBitonic_B2",
+                                               index_space_half);
+
+    // kernel executions
+    scoped_actor self{system};
+    auto conf_ref = dev.copy_to_device(buffer_type::input, config);
+    // self->send(w_rids_1, conf_ref, vals_ref, rids_ref)
+    std::vector<uint32_t> sort_conf(2);
+    for (uint32_t length = 1; length < values.size(); length <<= 1) {
+      int inc = length;
+      bool done = false;
+      sort_conf[0] = inc;
+      sort_conf[1] = length << 1;
+      conf_ref = dev.copy_to_device(buffer_type::input, sort_conf);
+      self->send(w_rids_2, conf_ref, vals_ref);
+      self->receive_while([&] { return !done; })(
+        [&](mem_ref<uint32_t>& conf, mem_ref<uint32_t>& vals) {
+          inc >>= 1;
+          if (inc > 0) {
+            sort_conf[0] = inc;
+            conf = dev.copy_to_device(buffer_type::input, sort_conf);
+            self->send(w_rids_2, conf, vals);
+          } else {
+            done = true;
+          }
+        },
+        others >> [&](message_view& x) -> result<message> {
+          cout << "Unexpected message" << x.content().stringify() << endl;
+          return sec::unexpected_message;
+        }
+      );
+    }
+    auto sorted = vals_ref.data();
+    if (sorted && is_sorted(sorted->begin(), sorted->end()))
+      cout << "Result is sorted" << endl;
+    else
+      cerr << "Something went wrong" << endl;
+  }
+  // clean up
   system.await_all_actors_done();
 }
 

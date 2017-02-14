@@ -134,7 +134,7 @@ size_t reduce_by_key(vector<T>& keys, vector<T>& vals) {
   keys.clear();
   vals = move(new_vals);
   keys = move(new_keys);
-  assert(keys.size() == lits.size());
+  assert(keys.size() == vals.size());
   return vals.size();
 }
 
