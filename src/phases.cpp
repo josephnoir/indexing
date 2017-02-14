@@ -41,8 +41,8 @@ using quit_atom = atom_constant<atom("quit")>;
 using index_atom = atom_constant<atom("index")>;
 
 constexpr const char* kernel_file_01 = "./include/sort_rids_by_value.cl";
-/*
 constexpr const char* kernel_file_02 = "./include/produce_chunck_id_literals.cl";
+/*
 constexpr const char* kernel_file_03 = "./include/merge_lit_by_val_chids.cl";
 constexpr const char* kernel_file_04 = "./include/produce_fills.cl";
 constexpr const char* kernel_file_05 = "./include/fuse_fill_literals.cl";
@@ -186,8 +186,8 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // load kernels
   auto prog_rids   = mngr.create_program_from_file(kernel_file_01, "", dev);
-  /*
   auto prog_chunks = mngr.create_program_from_file(kernel_file_02, "", dev);
+  /*
   auto prog_merge  = mngr.create_program_from_file(kernel_file_03, "", dev);
   auto prog_fills  = mngr.create_program_from_file(kernel_file_04, "", dev);
   auto prog_fuse   = mngr.create_program_from_file(kernel_file_05, "", dev);
@@ -201,9 +201,10 @@ void caf_main(actor_system& system, const config& cfg) {
   // buffers for execution
   vec config{static_cast<uint32_t>(values.size())};
   auto vals_ref = dev.copy_to_device(buffer_type::input_output, values);
-  // should be scratch space
-  auto rids_ref = dev.copy_to_device(buffer_type::output, vec(),
-                                     values.size());
+  // TODO: should be scratch space, but output is good for testing
+  auto rids_ref = dev.copy_to_device(buffer_type::output, vec(), values.size());
+  auto chid_ref = dev.copy_to_device(buffer_type::output, vec(), values.size());
+  auto lits_ref = dev.copy_to_device(buffer_type::output, vec(), values.size());
   {
     // create phases
     auto w_rids_1 = mngr.spawn_phase<vec, vec, vec>(prog_rids, "create_rids",
@@ -211,7 +212,9 @@ void caf_main(actor_system& system, const config& cfg) {
     auto w_rids_2 = mngr.spawn_phase<vec, vec, vec>(prog_rids,
                                                     "ParallelBitonic_B2",
                                                     index_space_half);
-
+    auto w_chuncks = mngr.spawn_phase<vec, vec, vec>(prog_chunks,
+                                                     "produce_chuncks",
+                                                     index_space);
     // kernel executions
     scoped_actor self{system};
     auto conf_ref = dev.copy_to_device(buffer_type::input, config);
@@ -243,6 +246,13 @@ void caf_main(actor_system& system, const config& cfg) {
         }
       );
     }
+    cout << "DONE: sort_rids_by_value" << endl;
+    self->send(w_chuncks, rids_ref, chid_ref, lits_ref);
+    self->receive(
+      [&](mem_ref<uint32_t>&, mem_ref<uint32_t>&, mem_ref<uint32_t>&) {
+        cout << "DONE: produce_chunck_id_literals" << endl;
+      }
+    );
 
     // test stuff
     /*

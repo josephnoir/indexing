@@ -5,13 +5,8 @@
  ******************************************************************************/
 
 /*
- * High level function:
- * kernel void sort_rids_by_value(global uint* config, global uint* input,
- *                                global uint* rids);
- *
- * Tasks:
- * - create vector rids (contains index)
- * - sort input and rids by input
+ * Requires a call to create_rids and multiple calls to the appropriate sort
+ * kernels found below. See the linked blog post below for explantion.
  */
 
 // Kernels to create rids
@@ -26,6 +21,7 @@ kernel void create_rids(global uint* config, global uint* input,
 }
 
 // Kernels for sorting
+
 /**
  * Sort found on: http://www.bealto.com/gpu-sorting_intro.html
  * License:
