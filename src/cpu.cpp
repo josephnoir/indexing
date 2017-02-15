@@ -189,7 +189,7 @@ void sort_rids_by_value(vector<uint32_t>& input, vector<uint32_t>& rids) {
 
 // in : rids, n (length)
 // out: chids, lits
-void produce_chunck_id_literals(vector<uint32_t>& rids,
+void produce_chunk_id_literals(vector<uint32_t>& rids,
                                 vector<uint32_t>& chids,
                                 vector<uint32_t>& lits) {
   assert(rids.size() == chids.size());
@@ -307,7 +307,7 @@ void caf_main(actor_system&, const config& cfg) {
   vector<uint32_t> lits(input.size());
 
   sort_rids_by_value(input, rids);
-  produce_chunck_id_literals(rids, chids, lits);
+  produce_chunk_id_literals(rids, chids, lits);
   auto k = merged_lit_by_val_chids(input, chids, lits);
   produce_fills(input, chids, k);
   vector<uint32_t> index(2 * k);

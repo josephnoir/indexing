@@ -10,7 +10,7 @@
 // Processing steps
 void sort_rids_by_value(global uint* input, global  uint* rids,
                         size_t li, size_t work_size);
-void produce_chunck_id_literals(global uint* rids, global uint* chids,
+void produce_chunk_id_literals(global uint* rids, global uint* chids,
                                 global uint* lits, size_t li, size_t work_size);
 size_t merged_lit_by_val_chids(global uint* input, global uint* chids,
                                global uint* lits, size_t li, size_t work_size);
@@ -63,7 +63,7 @@ kernel void kernel_wah_index(global uint* config,
   if (li < work_size && wg < num_wg) {
     sort_rids_by_value(work_input, work_rids, li, work_size);
     barrier(FENCE_TYPE);
-    produce_chunck_id_literals(work_rids, work_chids, work_lits, li, work_size);
+    produce_chunk_id_literals(work_rids, work_chids, work_lits, li, work_size);
     barrier(FENCE_TYPE);
     size_t k = merged_lit_by_val_chids(work_input, work_chids, work_lits, li,
                                        work_size);
@@ -88,8 +88,8 @@ void sort_rids_by_value(global uint* input,global uint* rids,
   parallel_selection_sort(input, rids, li, work_size);
 }
 
-void produce_chunck_id_literals(global uint* rids, global uint* chids,
-                                global uint* lits, size_t li, size_t work_size) {
+void produce_chunk_id_literals(global uint* rids, global uint* chids,
+                               global uint* lits, size_t li, size_t work_size) {
   (void) work_size;
   lits[li] = 1u << (rids[li] % 31u);
   lits[li] |= 1u << 31;

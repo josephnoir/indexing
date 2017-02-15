@@ -41,16 +41,15 @@ using quit_atom = atom_constant<atom("quit")>;
 using index_atom = atom_constant<atom("index")>;
 
 constexpr const char* kernel_file_01 = "./include/sort_rids_by_value.cl";
-constexpr const char* kernel_file_02 = "./include/produce_chunck_id_literals.cl";
-/*
+constexpr const char* kernel_file_02 = "./include/produce_chunk_id_literals.cl";
 constexpr const char* kernel_file_03 = "./include/merge_lit_by_val_chids.cl";
+/*
 constexpr const char* kernel_file_04 = "./include/produce_fills.cl";
 constexpr const char* kernel_file_05 = "./include/fuse_fill_literals.cl";
 constexpr const char* kernel_file_06 = "./include/compute_colum_length.cl";
 */
 
-/*
-constexpr const char* kernel_name_01a = "kernel_wah_index";
+//constexpr const char* kernel_name_01a = "kernel_wah_index";
 
 template<class T>
 string as_binary(T num) {
@@ -70,6 +69,7 @@ string as_binary(T num) {
   return s.str();
 }
 
+/*
 string decoded_bitmap(const vec& bitmap) {
   if (bitmap.empty()) {
     return "";
@@ -187,38 +187,46 @@ void caf_main(actor_system& system, const config& cfg) {
   // load kernels
   auto prog_rids   = mngr.create_program_from_file(kernel_file_01, "", dev);
   auto prog_chunks = mngr.create_program_from_file(kernel_file_02, "", dev);
-  /*
   auto prog_merge  = mngr.create_program_from_file(kernel_file_03, "", dev);
+  /*
   auto prog_fills  = mngr.create_program_from_file(kernel_file_04, "", dev);
   auto prog_fuse   = mngr.create_program_from_file(kernel_file_05, "", dev);
   auto prog_colum  = mngr.create_program_from_file(kernel_file_06, "", dev);
   */
 
   // create spawn configuration
-  auto index_space      = spawn_config{dim_vec{values.size()}};
-  auto index_space_half = spawn_config{dim_vec{values.size() / 2}};
+  auto n = values.size();
+  auto index_space      = spawn_config{dim_vec{n}};
+  auto index_space_half = spawn_config{dim_vec{n / 2}};
 
   // buffers for execution
-  vec config{static_cast<uint32_t>(values.size())};
-  auto vals_ref = dev.copy_to_device(buffer_type::input_output, values);
-  // TODO: should be scratch space, but output is good for testing
-  auto rids_ref = dev.copy_to_device(buffer_type::output, vec(), values.size());
-  auto chid_ref = dev.copy_to_device(buffer_type::output, vec(), values.size());
-  auto lits_ref = dev.copy_to_device(buffer_type::output, vec(), values.size());
+  vec config{static_cast<vec::value_type>(n)};
+  auto inpt_ref = dev.global_buffer(buffer_type::input_output, values);
+  // TODO: should be scratch space, but output is useful for testing
+  auto chid_ref = dev.scratch_space<vec::value_type>(n, buffer_type::output);
+  auto lits_ref = dev.scratch_space<vec::value_type>(n, buffer_type::output);
+  auto temp_ref = dev.scratch_space<vec::value_type>(n, buffer_type::output);
   {
     // create phases
-    auto w_rids_1 = mngr.spawn_phase<vec, vec, vec>(prog_rids, "create_rids",
-                                                    index_space);
-    auto w_rids_2 = mngr.spawn_phase<vec, vec, vec>(prog_rids,
-                                                    "ParallelBitonic_B2",
-                                                    index_space_half);
-    auto w_chuncks = mngr.spawn_phase<vec, vec, vec>(prog_chunks,
-                                                     "produce_chuncks",
-                                                     index_space);
+    auto rids_1 = mngr.spawn_phase<vec, vec, vec>(prog_rids, "create_rids",
+                                                  index_space);
+    auto rids_2 = mngr.spawn_phase<vec, vec, vec>(prog_rids,
+                                                  "ParallelBitonic_B2",
+                                                  index_space_half);
+    auto chunks = mngr.spawn_phase<vec, vec, vec>(prog_chunks,
+                                                  "produce_chunks",
+                                                  index_space);
+    auto merge_heads = mngr.spawn_phase<vec, vec, vec>(prog_merge,
+                                                       "create_heads",
+                                                       index_space);
+    auto merge_scan = mngr.spawn_phase<vec,vec>(prog_merge,
+                                                "lazy_segmented_scan",
+                                                index_space);
     // kernel executions
+    // temp_ref used as rids buffer
     scoped_actor self{system};
-    auto conf_ref = dev.copy_to_device(buffer_type::input, config);
-    self->send(w_rids_1, conf_ref, vals_ref, rids_ref);
+    auto conf_ref = dev.global_buffer(buffer_type::input, config);
+    self->send(rids_1, conf_ref, inpt_ref, temp_ref);
     self->receive(
       [&](mem_ref<uint32_t>&, mem_ref<uint32_t>&, mem_ref<uint32_t>&) {
         // nop
@@ -230,16 +238,16 @@ void caf_main(actor_system& system, const config& cfg) {
       bool done = false;
       config[0] = inc;
       config[1] = length << 1;
-      conf_ref = dev.copy_to_device(buffer_type::input, config);
-      self->send(w_rids_2, conf_ref, vals_ref, rids_ref);
+      conf_ref = dev.global_buffer(buffer_type::input, config);
+      self->send(rids_2, conf_ref, inpt_ref, temp_ref);
       self->receive_while([&] { return !done; })(
         [&](mem_ref<uint32_t>& conf, mem_ref<uint32_t>& vals,
             mem_ref<uint32_t>& rids) {
           inc >>= 1;
           if (inc > 0) {
             config[0] = inc;
-            conf = dev.copy_to_device(buffer_type::input, config);
-            self->send(w_rids_2, conf, vals, rids);
+            conf = dev.global_buffer(buffer_type::input, config);
+            self->send(rids_2, conf, vals, rids);
           } else {
             done = true;
           }
@@ -247,12 +255,35 @@ void caf_main(actor_system& system, const config& cfg) {
       );
     }
     cout << "DONE: sort_rids_by_value" << endl;
-    self->send(w_chuncks, rids_ref, chid_ref, lits_ref);
+    self->send(chunks, temp_ref, chid_ref, lits_ref);
     self->receive(
       [&](mem_ref<uint32_t>&, mem_ref<uint32_t>&, mem_ref<uint32_t>&) {
-        cout << "DONE: produce_chunck_id_literals" << endl;
+        cout << "DONE: produce_chunk_id_literals" << endl;
       }
     );
+    // use temp as heads array
+    self->send(merge_heads, inpt_ref, chid_ref, temp_ref);
+    self->receive(
+      [&](mem_ref<uint32_t>&, mem_ref<uint32_t>&, mem_ref<uint32_t>&) {
+        cout << "Create heads array" << endl;
+      }
+    );
+    self->send(merge_scan, temp_ref, lits_ref);
+    self->receive(
+      [&](mem_ref<uint32_t>& heads, mem_ref<uint32_t>& lits) {
+        auto res1 = heads.data();
+        auto res2 = lits.data();
+        if (!res1 || !res2) {
+          cout << "Something went wrong!" << endl;
+        } else {
+          for (size_t i = 0; i < res1->size(); ++i) {
+            cout << as_binary(res1->at(i)) << " : "
+                 << as_binary(res2->at(i)) << endl;
+          }
+        }
+      }
+    );
+
 
     // test stuff
     /*
