@@ -34,6 +34,7 @@ namespace caf {
 namespace {
 
 using vec = std::vector<uint32_t>;
+using val = vec::value_type;
 
 using add_atom = atom_constant<atom("add")>;
 using init_atom = atom_constant<atom("init")>;
@@ -77,7 +78,7 @@ string decoded_bitmap(const vec& bitmap) {
   stringstream s;
   for (auto& block : bitmap) {
     if (block & (0x1 << 31)) {
-      uint32_t mask = 0x1;
+      val mask = 0x1;
       for (int i = 0; i < 31; ++i) {
         s << ((block & mask) ? '1' : '0');
         mask <<= 1;
@@ -85,8 +86,8 @@ string decoded_bitmap(const vec& bitmap) {
     } else {
       auto bit = (block & (0x1 << 30)) ? '1' : '0';
       auto times = (block & (~(0x3 << 30)));
-      for (uint32_t i = 0; i < times; ++i) {
-        for (uint32_t j = 0; j < 31; ++j) {
+      for (val i = 0; i < times; ++i) {
+        for (val j = 0; j < 31; ++j) {
           s << bit;
         }
       }
@@ -104,8 +105,8 @@ string decoded_bitmap(const vec& bitmap) {
 
 // For testing, TODO: DELTE THIS
 /*
-vector<uint32_t> sort_rids_by_value(vector<uint32_t>& input) {
-  vector<uint32_t> rids(input.size());
+vector<val> sort_rids_by_value(vector<val>& input) {
+  vector<val> rids(input.size());
   iota(begin(rids), end(rids), 0);
   for (size_t i = (input.size() - 1); i > 0; --i) {
     for (size_t j = 0; j < i; ++j) {
@@ -130,8 +131,8 @@ vector<uint32_t> sort_rids_by_value(vector<uint32_t>& input) {
 class config : public actor_system_config {
 public:
   string filename = "";
-  uint32_t bound = 0;
-  string device_name = "GeForce GTX 780M";
+  val bound = 0;
+  string device_name = "GeForce GT 650M";
   bool print_results;
   config() {
     load<opencl::manager>();
@@ -154,7 +155,7 @@ void caf_main(actor_system& system, const config& cfg) {
   } else {
     cout << "Reading data from '" << cfg.filename << "' ... " << flush;
     ifstream source{cfg.filename, std::ios::in};
-    uint32_t next;
+    val next;
     while (source >> next) {
       values.push_back(next);
     }
@@ -196,16 +197,18 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // create spawn configuration
   auto n = values.size();
+  auto wgs = dev.get_max_compute_units();
   auto index_space      = spawn_config{dim_vec{n}};
   auto index_space_half = spawn_config{dim_vec{n / 2}};
+  auto index_space_128  = spawn_config{dim_vec{n}, {}, dim_vec{128}};
 
   // buffers for execution
-  vec config{static_cast<vec::value_type>(n)};
+  vec config{static_cast<val>(n)};
   auto inpt_ref = dev.global_buffer(buffer_type::input_output, values);
   // TODO: should be scratch space, but output is useful for testing
-  auto chid_ref = dev.scratch_space<vec::value_type>(n, buffer_type::output);
-  auto lits_ref = dev.scratch_space<vec::value_type>(n, buffer_type::output);
-  auto temp_ref = dev.scratch_space<vec::value_type>(n, buffer_type::output);
+  auto chid_ref = dev.scratch_space<val>(n, buffer_type::output);
+  auto lits_ref = dev.scratch_space<val>(n, buffer_type::output);
+  auto temp_ref = dev.scratch_space<val>(n, buffer_type::output);
   {
     // create phases
     auto rids_1 = mngr.spawn_phase<vec, vec, vec>(prog_rids, "create_rids",
@@ -222,18 +225,26 @@ void caf_main(actor_system& system, const config& cfg) {
     auto merge_scan = mngr.spawn_phase<vec,vec>(prog_merge,
                                                 "lazy_segmented_scan",
                                                 index_space);
+    auto merge_count = mngr.spawn_phase<vec, vec, vec, vec>(prog_merge,
+                                                            "countElts",
+                                                            index_space_128);
+    auto merge_merge
+      = mngr.spawn_phase<vec,vec,vec,vec,
+                         vec,vec,vec,vec>(prog_merge,
+                                          "moveValidElementsStaged",
+                                          index_space_128);
     // kernel executions
     // temp_ref used as rids buffer
     scoped_actor self{system};
     auto conf_ref = dev.global_buffer(buffer_type::input, config);
     self->send(rids_1, conf_ref, inpt_ref, temp_ref);
     self->receive(
-      [&](mem_ref<uint32_t>&, mem_ref<uint32_t>&, mem_ref<uint32_t>&) {
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
         // nop
       }
     );
     config.resize(2);
-    for (uint32_t length = 1; length < values.size(); length <<= 1) {
+    for (val length = 1; length < values.size(); length <<= 1) {
       int inc = length;
       bool done = false;
       config[0] = inc;
@@ -241,8 +252,8 @@ void caf_main(actor_system& system, const config& cfg) {
       conf_ref = dev.global_buffer(buffer_type::input, config);
       self->send(rids_2, conf_ref, inpt_ref, temp_ref);
       self->receive_while([&] { return !done; })(
-        [&](mem_ref<uint32_t>& conf, mem_ref<uint32_t>& vals,
-            mem_ref<uint32_t>& rids) {
+        [&](mem_ref<val>& conf, mem_ref<val>& vals,
+            mem_ref<val>& rids) {
           inc >>= 1;
           if (inc > 0) {
             config[0] = inc;
@@ -257,20 +268,22 @@ void caf_main(actor_system& system, const config& cfg) {
     cout << "DONE: sort_rids_by_value" << endl;
     self->send(chunks, temp_ref, chid_ref, lits_ref);
     self->receive(
-      [&](mem_ref<uint32_t>&, mem_ref<uint32_t>&, mem_ref<uint32_t>&) {
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
         cout << "DONE: produce_chunk_id_literals" << endl;
       }
     );
     // use temp as heads array
     self->send(merge_heads, inpt_ref, chid_ref, temp_ref);
     self->receive(
-      [&](mem_ref<uint32_t>&, mem_ref<uint32_t>&, mem_ref<uint32_t>&) {
-        cout << "Create heads array" << endl;
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
+        cout << "Created heads array" << endl;
       }
     );
     self->send(merge_scan, temp_ref, lits_ref);
     self->receive(
-      [&](mem_ref<uint32_t>& heads, mem_ref<uint32_t>& lits) {
+      [&](mem_ref<val>&, mem_ref<val>&) {
+        cout << "Merged values" << endl;
+        /*
         auto res1 = heads.data();
         auto res2 = lits.data();
         if (!res1 || !res2) {
@@ -281,8 +294,68 @@ void caf_main(actor_system& system, const config& cfg) {
                  << as_binary(res2->at(i)) << endl;
           }
         }
+        */
       }
     );
+    // stream compact inpt, chid, lits by heads value
+    config[0] = static_cast<val>(n);
+    config[1] = 0;
+    conf_ref = dev.global_buffer(buffer_type::input_output, config);
+     auto res1_conf = conf_ref.data();
+    if (!res1_conf) {
+      cout << "Somthing went wrong." << endl;
+      return;
+    }
+    cout << "Conf is {" << res1_conf->at(0) << ", " << res1_conf->at(1)
+         << "}." << endl;
+    auto blocks_ref = dev.scratch_space<val>(wgs, buffer_type::output);
+    auto b128_ref = dev.local_buffer<val>(buffer_type::scratch_space, 128);
+    self->send(merge_count, conf_ref, blocks_ref, temp_ref, b128_ref);
+    self->receive(
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>& ) {
+        cout << "Count step done." << endl;
+      }
+    );
+    auto out_ref = dev.scratch_space<val>(n, buffer_type::output);
+    self->send(merge_merge, conf_ref, inpt_ref, out_ref, temp_ref,
+                            blocks_ref, b128_ref, b128_ref, b128_ref);
+    self->receive(
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
+          mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
+        cout << "Merge step done (input)." << endl;
+      }
+    );
+    inpt_ref = out_ref;
+    /*
+    out_ref = dev.scratch_space<val>(n, buffer_type::output);
+    self->send(merge_merge, conf_ref, chid_ref, out_ref, temp_ref,
+                            blocks_ref, b128_ref, b128_ref, b128_ref);
+    self->receive(
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
+          mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
+        cout << "Merge step done (chids)." << endl;
+      }
+    );
+    chid_ref = out_ref;
+    out_ref = dev.scratch_space<val>(n, buffer_type::output);
+    self->send(merge_merge, conf_ref, lits_ref, out_ref, temp_ref,
+                            blocks_ref, b128_ref, b128_ref, b128_ref);
+    self->receive(
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
+          mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
+        cout << "Merge step done (lits)." << endl;
+      }
+    );
+    lits_ref = out_ref;
+    */
+    out_ref.reset();
+    auto res_conf = conf_ref.data();
+    if (!res_conf) {
+      cout << "Somthing went wrong." << endl;
+      return;
+    }
+    auto k = res_conf->at(0);
+    cout << "Compacted " << n << " values to " << k << " values" << endl;
 
 
     // test stuff

@@ -124,7 +124,7 @@ uint sumReduce128(local uint* arr) {
 }
 
 // len in config
-kernel void countElts(global uint* config,
+kernel void countElts(global uint* restrict config,
                       global uint* restrict dgBlockCounts,
                       global uint* restrict dgValid,
                       local  uint* restrict dsCount) {
@@ -189,14 +189,14 @@ int compactSIMDPrefixSum(local const uint* dsData, local const uint* dsValid,
   return numValid;
 }
 
-kernel void moveValidElementsStaged(global uint* config,
+kernel void moveValidElementsStaged(global       uint* restrict config,
                                     global const uint* restrict dgData,
                                     global       uint* restrict dgCompact,
                                     global const uint* restrict dgValid,
                                     global const uint* restrict dgBlockCounts,
-                                    local uint* restrict inBlock,
-                                    local uint* restrict validBlock,
-                                    local uint* restrict compactBlock) {
+                                    local        uint* restrict inBlock,
+                                    local        uint* restrict validBlock,
+                                    local        uint* restrict compactBlock) {
   uint len = config[0];
   // dNumValidElements = config[1]
   uint idx = get_local_id(0);
@@ -238,6 +238,6 @@ kernel void moveValidElementsStaged(global uint* config,
     }
     blockOutOffset += numValidBlock;
   }
-  if (gidx == (ngrps-1) && idx == 0)
+  if (gidx == (ngrps - 1) && idx == 0)
     config[1] = blockOutOffset;
 }
