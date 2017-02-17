@@ -7,15 +7,15 @@
 /**
  * High level function:
  * size_t merge_lit_by_val_chids(global uint* input, global uint* chids,
- *                                global uint* lits, size_t li, size_t work_size); 
+ *                                global uint* lits, size_t li, size_t work_size);
  */
 
 
 // prototypes
 uint sumReduce128(local uint* arr);
-int compactSIMDPrefixSum(local const uint* dsData, local const uint* dsValid,
+uint compactSIMDPrefixSum(local const uint* dsData, local const uint* dsValid,
                          local uint* dsCompact,    local uint* dsLocalIndex);
-int exclusivePrescan128(local const uint* in, local uint* outAndTemp);
+uint exclusivePrescan128(local const uint* in, local uint* outAndTemp);
 
 /**
  * Steps
@@ -60,7 +60,7 @@ kernel void exclusive_scan() {
 
 }
 
-// compact to keep only the 
+// compact to keep only the
 kernel void stream_compaction(global uint* config, global uint* heads,
                               global uint* keys_low, global uint* heads,
                               global uint* values) {
@@ -78,27 +78,29 @@ kernel void stream_compaction(global uint* config, global uint* heads,
  *  File:    platforms/opencl/src/kernels/compact.cl
  *  Notes:
  *    - paper recommends 128 threads/block, so this is hard coded.
- *    - I only implement the prefix-sum based compact primitive, 
- *      and not the POPC one, as that is more complicated and performs poorly 
+ *    - I only implement the prefix-sum based compact primitive,
+ *      and not the POPC one, as that is more complicated and performs poorly
  *      on current hardware
- *    - I only implement the scattered- and staged-write variant of phase III 
- *      as it they have reasonable performance across most of the tested 
+ *    - I only implement the scattered- and staged-write variant of phase III
+ *      as it they have reasonable performance across most of the tested
  *      workloads in the paper. The selective variant is not implemented.
- *    - The prefix sum of per-block element counts (phase II) is not done in 
- *      a particularly efficient manner. It is, however, done in a very easy 
+ *    - The prefix sum of per-block element counts (phase II) is not done in
+ *      a particularly efficient manner. It is, however, done in a very easy
  *      to program manner, and integrated into the top of phase III, reducing
- *      the number of kernel invocations required. If one wanted to use 
+ *      the number of kernel invocations required. If one wanted to use
  *      existing code, it'd be easy to take the CUDA SDK scanLargeArray
  *      sample, and do a prefix sum over dgBlockCounts in a phase II kernel.
  *      You could also adapt the existing prescan128 to take an initial value,
  *      and scan dgBlockCounts in stages.
  *
  * Date:         23 Aug 2009
- * Author:       CUDA version by Imran Haque (ihaque@cs.stanford.edu), 
+ * Author:       CUDA version by Imran Haque (ihaque@cs.stanford.edu),
  *               converted to OpenCL by Peter Eastman
  * Affiliation:  Stanford University
  * License:      Public Domain
  */
+
+#define N 128
 
 // Phase 1: Count valid elements per thread block
 // Hard-code 128 thd/blk
@@ -147,40 +149,34 @@ kernel void countElts(global uint* restrict config,
 }
 
 // Phase 2/3: Move valid elements using SIMD compaction. Phase 2 is done
-// implicitly at top of global__ method. Exclusive prefix scan over 128 
+// implicitly at top of global__ method. Exclusive prefix scan over 128
 // elements, assumes 128 threads. Taken from cuda SDK "scan" sample for
 // naive scan, with small modifications.
-int exclusivePrescan128(local const uint* in, local uint* outAndTemp) {
+uint exclusivePrescan128(local const uint* in, local uint* outAndTemp) {
   const uint idx = get_local_id(0);
-  const uint n = 128;
-  //TODO: this temp storage could be reduced since we write to shared 
-  //      memory in out anyway, and n is hardcoded
-  //__shared__ int temp[2*n];
-  local uint* temp = outAndTemp;
   int pout = 1;
   int pin  = 0;
 
-  // load input into temp
+  // load input into outAndTemp
   // This is exclusive scan, so shift right by one and set first elt to 0
-  temp[pout * n + idx] = (idx > 0) ? in[idx - 1] : 0;
+  outAndTemp[pout * N + idx] = (idx > 0) ? in[idx - 1] : 0;
   barrier(CLK_LOCAL_MEM_FENCE);
-  for (uint offset = 1; offset < n; offset *= 2) {
+  for (uint offset = 1; offset < N; offset *= 2) {
     pout = 1 - pout; // swap double buffer indices
     pin  = 1 - pout;
     barrier(CLK_LOCAL_MEM_FENCE);
-    temp[pout * n + idx] = temp[pin * n + idx];
+    outAndTemp[pout * N + idx] = outAndTemp[pin * N + idx];
     if (idx >= offset)
-      temp[pout * n + idx] += temp[pin * n + idx - offset];
+      outAndTemp[pout * N + idx] += outAndTemp[pin * N + idx - offset];
   }
-  //out[idx] = temp[pout*n+idx]; // write output
   barrier(CLK_LOCAL_MEM_FENCE);
-  return outAndTemp[127] + in[127]; // Return sum of all elements
+  return outAndTemp[N - 1] + in[N - 1]; // Return sum of all elements
 }
 
-int compactSIMDPrefixSum(local const uint* dsData, local const uint* dsValid,
+uint compactSIMDPrefixSum(local const uint* dsData, local const uint* dsValid,
                          local uint* dsCompact,    local uint* dsLocalIndex) {
   uint idx = get_local_id(0);
-  int numValid = exclusivePrescan128(dsValid,dsLocalIndex);
+  uint numValid = exclusivePrescan128(dsValid,dsLocalIndex);
   if (dsValid[idx])
     dsCompact[dsLocalIndex[idx]] = dsData[idx];
   return numValid;
