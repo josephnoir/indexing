@@ -44,13 +44,29 @@ using index_atom = atom_constant<atom("index")>;
 constexpr const char* kernel_file_01 = "./include/sort_rids_by_value.cl";
 constexpr const char* kernel_file_02 = "./include/produce_chunk_id_literals.cl";
 constexpr const char* kernel_file_03 = "./include/merge_lit_by_val_chids.cl";
-/*
 constexpr const char* kernel_file_04 = "./include/produce_fills.cl";
+/*
 constexpr const char* kernel_file_05 = "./include/fuse_fill_literals.cl";
 constexpr const char* kernel_file_06 = "./include/compute_colum_length.cl";
 */
 
 //constexpr const char* kernel_name_01a = "kernel_wah_index";
+
+/*****************************************************************************\
+                              JUST FOR OUTPUT
+\*****************************************************************************/
+
+template <class T>
+void valid_or_exit(T expr, const std::string& str = "") {
+  if (expr)
+    return;
+  if (str.empty()) {
+    cout << "[!!!] Something went wrong" << endl;
+  } else {
+    cout << "[!!!] " << str << endl;
+  }
+  exit(-1);
+}
 
 template<class T>
 string as_binary(T num) {
@@ -103,7 +119,9 @@ string decoded_bitmap(const vec& bitmap) {
 }
 */
 
-// For testing, TODO: DELTE THIS
+/*****************************************************************************\
+        TESTS FUNCTIONS ON CPU FOR COMPARISON (TODO: DELTE THIS LATER)
+\*****************************************************************************/
 /*
 vector<val> sort_rids_by_value(vector<val>& input) {
   vector<val> rids(input.size());
@@ -208,7 +226,31 @@ size_t merged_lit_by_val_chids(vector<uint32_t>& input,
   return reduce_by_key(input, chids, lits);
 }
 
-} // namespace <anonymous>
+// in : input, chids, k (reduced length)
+// out: chids with 0-fill symbols
+void produce_fills(vector<uint32_t>& input,
+                   vector<uint32_t>& chids,
+                   size_t k) {
+  vector<uint32_t> heads(k);
+  adjacent_difference(begin(input), begin(input) + k, begin(heads));
+  heads.front() = 1;
+  vector<uint32_t> new_chids(k);
+  for (size_t i = 0; i < k; ++i) {
+    if (heads[i] == 0) {
+      new_chids[i] = chids[i] - chids[i - 1] - 1;
+    } else {
+      new_chids[i] = chids[i];
+      // This seems to result in the loss of fills
+      //if (chids[i] != 0)
+      //  new_chids[i] = chids[i] - 1;
+    }
+  }
+  chids = std::move(new_chids);
+}
+
+/*****************************************************************************\
+                          INTRODUCE SOME CLI ARGUMENTS
+\*****************************************************************************/
 
 class config : public actor_system_config {
 public:
@@ -227,18 +269,11 @@ public:
   }
 };
 
-template <class T>
-void valid_or_exit(T expr, const std::string& str = "") {
-  if (expr)
-    return;
-  if (str.empty()) {
-    cout << "[!!!] '" << __FILE__ << "': " << __LINE__ << endl;
-  } else {
-    cout << "[!!!] " << str << endl;
-  }
-  exit(-1);
-}
+} // namespace <anonymous>
 
+/*****************************************************************************\
+                                    MAIN!
+\*****************************************************************************/
 
 void caf_main(actor_system& system, const config& cfg) {
   vec values;
@@ -291,8 +326,8 @@ void caf_main(actor_system& system, const config& cfg) {
   auto prog_rids   = mngr.create_program_from_file(kernel_file_01, "", dev);
   auto prog_chunks = mngr.create_program_from_file(kernel_file_02, "", dev);
   auto prog_merge  = mngr.create_program_from_file(kernel_file_03, "", dev);
-  /*
   auto prog_fills  = mngr.create_program_from_file(kernel_file_04, "", dev);
+  /*
   auto prog_fuse   = mngr.create_program_from_file(kernel_file_05, "", dev);
   auto prog_colum  = mngr.create_program_from_file(kernel_file_06, "", dev);
   */
@@ -340,6 +375,9 @@ void caf_main(actor_system& system, const config& cfg) {
                          vec,vec,vec,vec>(prog_merge,
                                           "moveValidElementsStaged",
                                           index_space_128);
+    auto fills = mngr.spawn_phase<vec,vec,vec,vec>(prog_fills,
+                                                   "produce_fills",
+                                                   index_space);
     // kernel executions
     // temp_ref used as rids buffer
     scoped_actor self{system};
@@ -465,8 +503,7 @@ void caf_main(actor_system& system, const config& cfg) {
         cout << "Merge step done (input)." << endl;
       }
     );
-    inpt_ref = out_ref;
-    out_ref = dev.scratch_space<val>(n, buffer_type::output);
+    inpt_ref.swap(out_ref);
     self->send(merge_merge, conf_ref, chid_ref, out_ref, temp_ref,
                             blocks_ref, b128_ref, b128_ref, b128_ref);
     self->receive(
@@ -475,8 +512,7 @@ void caf_main(actor_system& system, const config& cfg) {
         cout << "Merge step done (chids)." << endl;
       }
     );
-    chid_ref = out_ref;
-    out_ref = dev.scratch_space<val>(n, buffer_type::output);
+    chid_ref.swap(out_ref);
     self->send(merge_merge, conf_ref, lits_ref, out_ref, temp_ref,
                             blocks_ref, b128_ref, b128_ref, b128_ref);
     self->receive(
@@ -485,14 +521,46 @@ void caf_main(actor_system& system, const config& cfg) {
         cout << "Merge step done (lits)." << endl;
       }
     );
-    lits_ref = out_ref;
-    out_ref.reset();
+    lits_ref.swap(out_ref);
+    cout << "DONE: merged_lit_by_val_chids." << endl;
     auto res_conf = conf_ref.data();
+    auto res_inpt = inpt_ref.data();
+    auto res_chid = chid_ref.data();
+    auto res_lits = lits_ref.data();
     valid_or_exit(res_conf);
+    valid_or_exit(res_inpt);
+    valid_or_exit(res_chid);
+    valid_or_exit(res_lits);
     auto k = res_conf->at(1);
     auto k2 = merged_lit_by_val_chids(input, chids, lits);
-    cout << "Compacted " << n << " values to " << k << " values" << endl;
-    cout << "Expected " << k2 << endl;
+    valid_or_exit(k == k2);
+    vec new_inpt{*res_inpt};
+    vec new_chid{*res_chid};
+    vec new_lits{*res_lits};
+    new_inpt.resize(k);
+    new_chid.resize(k);
+    new_lits.resize(k);
+    valid_or_exit(new_inpt == input, "input not equal");
+    valid_or_exit(new_chid == chids, "chids not equal");
+    valid_or_exit(new_lits == lits, "lits not equal");
+    self->send(fills, conf_ref, inpt_ref, chid_ref, out_ref);
+    self->receive(
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>& ) {
+        cout << "DONE: produce fills." << endl;
+      }
+    );
+    chid_ref.swap(out_ref);
+    res_inpt = inpt_ref.data();
+    res_chid = chid_ref.data();
+    valid_or_exit(res_inpt, "destroyed input");
+    valid_or_exit(res_chid, "can't read fills");
+    produce_fills(input, chids, k);
+    new_inpt = *res_inpt;
+    new_chid = *res_chid;
+    new_inpt.resize(k);
+    new_chid.resize(k);
+    valid_or_exit(new_inpt == input, "input not equal");
+    valid_or_exit(new_chid == chids, "chids not equal");
 
   }
   // clean up
