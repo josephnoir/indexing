@@ -211,31 +211,30 @@ kernel void moveValidElementsStaged(global       uint* restrict config,
   for (uint base = 0; base < gidx; base += lsize) {
     // Load up the count of valid elements for each block before us 
     // in batches of 128
-    validBlock[idx] = 0;
     if ((base + idx) < gidx)
-        validBlock[idx] = dgBlockCounts[base + idx];
+      validBlock[idx] = dgBlockCounts[base + idx];
+    else 
+      validBlock[idx] = 0;
     barrier(CLK_LOCAL_MEM_FENCE);
-    // Parallel reduce these counts
-    // Accumulate in the final offset variable
+    // Parallel reduce these counts, accumulate in the final offset variable
     blockOutOffset += sumReduce128(validBlock);
     barrier(CLK_LOCAL_MEM_FENCE);
   }
-  // epb = eltsPerBlock
   const uint epb = len / ngrps + ((len % ngrps) ? 1 : 0);
-  uint ub = (len < (gidx + 1) * epb) ? len : ((gidx + 1) * epb);
+  const uint ub = (len < (gidx + 1) * epb) ? len : ((gidx + 1) * epb);
   for (uint base = gidx * epb; base < (gidx + 1) * epb; base += lsize) {
-    validBlock[idx] = 0;
     if ((base + idx) < ub) {
       validBlock[idx] = dgValid[base + idx];
       inBlock[idx] = dgData[base + idx];
+    } else {
+      validBlock[idx] = 0;
     }
     barrier(CLK_LOCAL_MEM_FENCE);
-    uint numValidBlock
-      = compactSIMDPrefixSum(inBlock, validBlock, compactBlock, dsLocalIndex);
+    uint numValidBlock = compactSIMDPrefixSum(inBlock, validBlock, 
+                                              compactBlock, dsLocalIndex);
     barrier(CLK_LOCAL_MEM_FENCE);
-    if (idx < numValidBlock) {
+    if (idx < numValidBlock)
       dgCompact[blockOutOffset + idx] = compactBlock[idx];
-    }
     blockOutOffset += numValidBlock;
   }
   if (gidx == (ngrps - 1) && idx == 0)

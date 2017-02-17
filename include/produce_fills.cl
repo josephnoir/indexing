@@ -12,8 +12,9 @@
  */
 
 /*
-void produce_fills(global uint* input, global uint* chids,
-                   size_t li, size_t work_size) {
+void produce_fills(global uint* config, 
+                   global uint* input,
+                   global uint* chids) {
   uint tmp = chids[li];
   if (li != 0 && input[li] == input[li - 1]) {
     tmp = chids[li] - chids[li - 1] - 1;

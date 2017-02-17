@@ -160,6 +160,54 @@ void produce_chunk_id_literals(vector<uint32_t>& rids,
   }
 }
 
+template<class T>
+size_t reduce_by_key(vector<T>& input, vector<T>& chids, vector<T>& lits) {
+  assert(input.size() == chids.size());
+  assert(chids.size() == lits.size());
+  auto max = input.size();
+  vector<T> new_input;
+  vector<T> new_chids;
+  vector<T> new_lits;
+  size_t from = 0;
+  while (from < max) {
+    new_input.push_back(input[from]);
+    new_chids.push_back(chids[from]);
+    auto to = from;
+    while (to < max && input[to] == input[from] && chids[to] == chids[from])
+      ++to;
+    /*
+    cout << "Bounds: " << from << " - " << to << endl;
+    for (size_t i = from; i < to; ++i) {
+      cout << as_binary(input[i]) << as_binary(chids[i])
+           << " --> " << as_binary(lits[i]) << endl;
+    }
+    */
+    T merged_lit = 0;
+    while (from < to) {
+      merged_lit |= lits[from];
+      ++from;
+    }
+    new_lits.push_back(merged_lit);
+  }
+  input.clear();
+  chids.clear();
+  lits.clear();
+  input = move(new_input);
+  chids = move(new_chids);
+  lits = move(new_lits);
+  assert(input.size() == chids.size());
+  assert(chids.size() == lits.size());
+  return lits.size();
+}
+
+// in : input, chids, lits, n (length)
+// out: input, chids, lits but reduced to length k
+size_t merged_lit_by_val_chids(vector<uint32_t>& input,
+                               vector<uint32_t>& chids,
+                               vector<uint32_t>& lits) {
+  return reduce_by_key(input, chids, lits);
+}
+
 } // namespace <anonymous>
 
 class config : public actor_system_config {
@@ -178,6 +226,19 @@ public:
     .add(print_results, "print,p", "print resulting bitmap index");
   }
 };
+
+template <class T>
+void valid_or_exit(T expr, const std::string& str = "") {
+  if (expr)
+    return;
+  if (str.empty()) {
+    cout << "[!!!] '" << __FILE__ << "': " << __LINE__ << endl;
+  } else {
+    cout << "[!!!] " << str << endl;
+  }
+  exit(-1);
+}
+
 
 void caf_main(actor_system& system, const config& cfg) {
   vec values;
@@ -347,9 +408,9 @@ void caf_main(actor_system& system, const config& cfg) {
         auto in_exp = inpt_ref.data();
         auto ch_exp = chid_r.data();
         auto li_exp = lit_r.data();
-        if (!in_exp || !ch_exp || !li_exp) {
-          cout << "Something went wrong" << endl;
-        }
+        valid_or_exit(in_exp);
+        valid_or_exit(ch_exp);
+        valid_or_exit(li_exp);
         auto in = *in_exp;
         auto ch = *ch_exp;
         auto li = *li_exp;
@@ -396,7 +457,7 @@ void caf_main(actor_system& system, const config& cfg) {
       }
     );
     auto out_ref = dev.scratch_space<val>(n, buffer_type::output);
-    self->send(merge_merge, conf_ref, inpt_ref, out_ref, temp_ref,
+    self->send(merge_merge, conf_ref,   inpt_ref, out_ref,  temp_ref,
                             blocks_ref, b128_ref, b128_ref, b128_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
@@ -405,7 +466,6 @@ void caf_main(actor_system& system, const config& cfg) {
       }
     );
     inpt_ref = out_ref;
-    /*
     out_ref = dev.scratch_space<val>(n, buffer_type::output);
     self->send(merge_merge, conf_ref, chid_ref, out_ref, temp_ref,
                             blocks_ref, b128_ref, b128_ref, b128_ref);
@@ -426,22 +486,14 @@ void caf_main(actor_system& system, const config& cfg) {
       }
     );
     lits_ref = out_ref;
-    */
     out_ref.reset();
     auto res_conf = conf_ref.data();
-    if (!res_conf) {
-      cout << "Somthing went wrong." << endl;
-      return;
-    }
-    auto k = res_conf->at(0);
+    valid_or_exit(res_conf);
+    auto k = res_conf->at(1);
+    auto k2 = merged_lit_by_val_chids(input, chids, lits);
     cout << "Compacted " << n << " values to " << k << " values" << endl;
+    cout << "Expected " << k2 << endl;
 
-
-    // test stuff
-    /*
-    vec test_keys = values;
-    vec test_vals = sort_rids_by_value(test_keys);
-    */
   }
   // clean up
   system.await_all_actors_done();
