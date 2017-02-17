@@ -45,8 +45,8 @@ constexpr const char* kernel_file_01 = "./include/sort_rids_by_value.cl";
 constexpr const char* kernel_file_02 = "./include/produce_chunk_id_literals.cl";
 constexpr const char* kernel_file_03 = "./include/merge_lit_by_val_chids.cl";
 constexpr const char* kernel_file_04 = "./include/produce_fills.cl";
-/*
 constexpr const char* kernel_file_05 = "./include/fuse_fill_literals.cl";
+/*
 constexpr const char* kernel_file_06 = "./include/compute_colum_length.cl";
 */
 
@@ -327,8 +327,8 @@ void caf_main(actor_system& system, const config& cfg) {
   auto prog_chunks = mngr.create_program_from_file(kernel_file_02, "", dev);
   auto prog_merge  = mngr.create_program_from_file(kernel_file_03, "", dev);
   auto prog_fills  = mngr.create_program_from_file(kernel_file_04, "", dev);
-  /*
   auto prog_fuse   = mngr.create_program_from_file(kernel_file_05, "", dev);
+  /*
   auto prog_colum  = mngr.create_program_from_file(kernel_file_06, "", dev);
   */
 
@@ -378,6 +378,9 @@ void caf_main(actor_system& system, const config& cfg) {
     auto fills = mngr.spawn_phase<vec,vec,vec,vec>(prog_fills,
                                                    "produce_fills",
                                                    index_space);
+    auto fuse_prep = mngr.spawn_phase<vec,vec,vec,vec>(prog_fuse,
+                                                       "prepare_index",
+                                                       index_space);
     // kernel executions
     // temp_ref used as rids buffer
     scoped_actor self{system};
@@ -543,6 +546,7 @@ void caf_main(actor_system& system, const config& cfg) {
     valid_or_exit(new_inpt == input, "input not equal");
     valid_or_exit(new_chid == chids, "chids not equal");
     valid_or_exit(new_lits == lits, "lits not equal");
+    // we should reconfigure the NDRange of fills-actor here to k
     self->send(fills, conf_ref, inpt_ref, chid_ref, out_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>& ) {
@@ -561,7 +565,15 @@ void caf_main(actor_system& system, const config& cfg) {
     new_chid.resize(k);
     valid_or_exit(new_inpt == input, "input not equal");
     valid_or_exit(new_chid == chids, "chids not equal");
-
+    // TODO: release buffers no longer needed
+    // we should reconfigure the NDRange of fuse_prep-actor here to k
+    auto idx_ref = dev.scratch_space<val>(2*k, buffer_type::output);
+    self->send(fuse_prep, conf_ref, chid_ref, lits_ref, idx_ref);
+    self->receive(
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>& ) {
+        cout << "Prepared index." << endl;
+      }
+    );
   }
   // clean up
   system.await_all_actors_done();
