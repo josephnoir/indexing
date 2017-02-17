@@ -103,24 +103,23 @@ kernel void stream_compaction(global uint* config, global uint* heads,
 // Phase 1: Count valid elements per thread block
 // Hard-code 128 thd/blk
 uint sumReduce128(local uint* arr) {
-    // Parallel reduce element counts
-    // Assumes 128 thd/block
-    int idx = get_local_id(0);
-    if (idx < 64) arr[idx] += arr[idx+64];
-    barrier(CLK_LOCAL_MEM_FENCE);
-    if (idx < 32) arr[idx] += arr[idx+32];
-    barrier(CLK_LOCAL_MEM_FENCE);
-    if (idx < 16) arr[idx] += arr[idx+16];
-    barrier(CLK_LOCAL_MEM_FENCE);
-    if (idx < 8) arr[idx] += arr[idx+8];
-    barrier(CLK_LOCAL_MEM_FENCE);
-    if (idx < 4) arr[idx] += arr[idx+4];
-    barrier(CLK_LOCAL_MEM_FENCE);
-    if (idx < 2) arr[idx] += arr[idx+2];
-    barrier(CLK_LOCAL_MEM_FENCE);
-    if (idx < 1) arr[idx] += arr[idx+1];
-    barrier(CLK_LOCAL_MEM_FENCE);
-    return arr[0];
+  // Parallel reduce element counts, assumes 128 thd/block
+  const uint idx = get_local_id(0);
+  if (idx < 64) arr[idx] += arr[idx + 64];
+  barrier(CLK_LOCAL_MEM_FENCE);
+  if (idx < 32) arr[idx] += arr[idx + 32];
+  barrier(CLK_LOCAL_MEM_FENCE);
+  if (idx < 16) arr[idx] += arr[idx + 16];
+  barrier(CLK_LOCAL_MEM_FENCE);
+  if (idx <  8) arr[idx] += arr[idx +  8];
+  barrier(CLK_LOCAL_MEM_FENCE);
+  if (idx <  4) arr[idx] += arr[idx +  4];
+  barrier(CLK_LOCAL_MEM_FENCE);
+  if (idx <  2) arr[idx] += arr[idx +  2];
+  barrier(CLK_LOCAL_MEM_FENCE);
+  if (idx <  1) arr[idx] += arr[idx +  1];
+  barrier(CLK_LOCAL_MEM_FENCE);
+  return arr[0];
 }
 
 // len in config
@@ -128,16 +127,14 @@ kernel void countElts(global uint* restrict config,
                       global uint* restrict dgBlockCounts,
                       global uint* restrict dgValid,
                       local  uint* restrict dsCount) {
-  uint len = config[0];
-  uint idx  = get_local_id(0);
-  uint gidx = get_group_id(0);
-  uint ngrps = get_num_groups(0);
-  uint lsize = get_local_size(0);
+  const uint len = config[0];
+  const uint idx  = get_local_id(0);
+  const uint gidx = get_group_id(0);
+  const uint ngrps = get_num_groups(0);
+  const uint lsize = get_local_size(0);
+  const uint epb = len / ngrps + ((len % ngrps) ? 1 : 0); // epb: eltsPerBlock
+  const uint ub  = (len < (gidx + 1) * epb) ? len : ((gidx + 1) * epb);
   dsCount[idx] = 0;
-  // epb: eltsPerBlock
-  const uint epb = len / get_num_groups(0) + ((len % ngrps) ? 1 : 0);
-  uint ub
-    = (len < (gidx + 1) * epb) ? len : ((gidx + 1) * epb);
   for (uint base = gidx * epb; base < (gidx + 1) * epb; base += lsize) {
     if ((base + idx) < ub && dgValid[base + idx])
       dsCount[idx]++;
@@ -154,7 +151,7 @@ kernel void countElts(global uint* restrict config,
 // elements, assumes 128 threads. Taken from cuda SDK "scan" sample for
 // naive scan, with small modifications.
 int exclusivePrescan128(local const uint* in, local uint* outAndTemp) {
-  uint idx = get_local_id(0);
+  const uint idx = get_local_id(0);
   const uint n = 128;
   //TODO: this temp storage could be reduced since we write to shared 
   //      memory in out anyway, and n is hardcoded
