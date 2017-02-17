@@ -125,6 +125,40 @@ vector<val> sort_rids_by_value(vector<val>& input) {
   return rids;
 }
 */
+// in : input
+// out: input, rids (both sorted by input)
+void sort_rids_by_value(vector<uint32_t>& input, vector<uint32_t>& rids) {
+  assert(input.size() == rids.size());
+  iota(begin(rids), end(rids), 0);
+  for (size_t i = (input.size() - 1); i > 0; --i) {
+    for (size_t j = 0; j < i; ++j) {
+      if (input[j] > input[j + 1]) {
+        // switch input
+        auto tmp     = input[j];
+        input[j    ] = input[j + 1];
+        input[j + 1] = tmp;
+        // switch rids
+        tmp         = rids[j    ];
+        rids[j    ] = rids[j + 1];
+        rids[j + 1] = tmp;
+      }
+    }
+  }
+}
+
+// in : rids, n (length)
+// out: chids, lits
+void produce_chunk_id_literals(vector<uint32_t>& rids,
+                                vector<uint32_t>& chids,
+                                vector<uint32_t>& lits) {
+  assert(rids.size() == chids.size());
+  assert(rids.size() == lits.size());
+  for (size_t i = 0; i < rids.size(); ++i) {
+    lits[i]  = 0x1 << (rids[i] % 31);
+    lits[i] |= 0x1 << 31;
+    chids[i] = rids[i] / 31;
+  }
+}
 
 } // namespace <anonymous>
 
@@ -132,7 +166,7 @@ class config : public actor_system_config {
 public:
   string filename = "";
   val bound = 0;
-  string device_name = "GeForce GT 650M";
+  string device_name = "GeForce GTX 780M";
   bool print_results;
   config() {
     load<opencl::manager>();
@@ -184,6 +218,13 @@ void caf_main(actor_system& system, const config& cfg) {
   }
   auto dev = *opt;
 
+  // For testing
+  auto input = values;
+  vector<uint32_t> rids(input.size());
+  vector<uint32_t> chids(input.size());
+  vector<uint32_t> lits(input.size());
+  sort_rids_by_value(input, rids);
+  produce_chunk_id_literals(rids, chids, lits);
 
   // load kernels
   auto prog_rids   = mngr.create_program_from_file(kernel_file_01, "", dev);
@@ -199,7 +240,7 @@ void caf_main(actor_system& system, const config& cfg) {
   auto n = values.size();
   auto wgs = dev.get_max_compute_units();
   auto index_space      = spawn_config{dim_vec{n}};
-  auto index_space_half = spawn_config{dim_vec{n / 2}};
+  //auto index_space_half = spawn_config{dim_vec{n / 2}};
   auto index_space_128  = spawn_config{dim_vec{n}, {}, dim_vec{128}};
 
   // buffers for execution
@@ -213,9 +254,14 @@ void caf_main(actor_system& system, const config& cfg) {
     // create phases
     auto rids_1 = mngr.spawn_phase<vec, vec, vec>(prog_rids, "create_rids",
                                                   index_space);
+    /*
     auto rids_2 = mngr.spawn_phase<vec, vec, vec>(prog_rids,
                                                   "ParallelBitonic_B2",
                                                   index_space_half);
+    */
+    auto rids_3 = mngr.spawn_phase<vec, vec, vec, vec>(prog_rids,
+                                                       "ParallelSelection",
+                                                       index_space);
     auto chunks = mngr.spawn_phase<vec, vec, vec>(prog_chunks,
                                                   "produce_chunks",
                                                   index_space);
@@ -244,6 +290,18 @@ void caf_main(actor_system& system, const config& cfg) {
       }
     );
     config.resize(2);
+    // chids and lit only used as temporary buffers
+    self->send(rids_3, inpt_ref, temp_ref, chid_ref, lits_ref);
+    self->receive(
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
+        // nop
+      }
+    );
+    inpt_ref = chid_ref;
+    temp_ref = lits_ref;
+    chid_ref = dev.scratch_space<val>(n, buffer_type::output);
+    lits_ref = dev.scratch_space<val>(n, buffer_type::output);
+    /*
     for (val length = 1; length < values.size(); length <<= 1) {
       int inc = length;
       bool done = false;
@@ -265,11 +323,39 @@ void caf_main(actor_system& system, const config& cfg) {
         }
       );
     }
+    */
     cout << "DONE: sort_rids_by_value" << endl;
+    /*
+    auto inpt_exp = inpt_ref.data();
+    auto rids_exp = temp_ref.data();
+    if (!inpt_exp || !rids_exp)
+      cout << "Something went wrong" << endl;
+    else {
+      auto inp = *inpt_exp;
+      auto rid = *rids_exp;
+      for (size_t i = 0; i < inp.size(); ++i) {
+        cout << "[" << (inp[i] == input[i]) << "|" << (rid[i] == rids[i]) << "] "
+             << setw(4) << inp[i] << ": "
+             << setw(4) << rid[i] << " =?= " << setw(4) << rids[i] << endl;
+      }
+    }
+    */
     self->send(chunks, temp_ref, chid_ref, lits_ref);
     self->receive(
-      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
+      [&](mem_ref<val>&, mem_ref<val>& chid_r, mem_ref<val>& lit_r) {
         cout << "DONE: produce_chunk_id_literals" << endl;
+        auto in_exp = inpt_ref.data();
+        auto ch_exp = chid_r.data();
+        auto li_exp = lit_r.data();
+        if (!in_exp || !ch_exp || !li_exp) {
+          cout << "Something went wrong" << endl;
+        }
+        auto in = *in_exp;
+        auto ch = *ch_exp;
+        auto li = *li_exp;
+        cout << "Input equal: " << (in == input) << endl;
+        cout << "Chids equal: " << (ch == chids) << endl;
+        cout << "Lits  equal: " << (li == lits) << endl;
       }
     );
     // use temp as heads array
@@ -301,13 +387,6 @@ void caf_main(actor_system& system, const config& cfg) {
     config[0] = static_cast<val>(n);
     config[1] = 0;
     conf_ref = dev.global_buffer(buffer_type::input_output, config);
-     auto res1_conf = conf_ref.data();
-    if (!res1_conf) {
-      cout << "Somthing went wrong." << endl;
-      return;
-    }
-    cout << "Conf is {" << res1_conf->at(0) << ", " << res1_conf->at(1)
-         << "}." << endl;
     auto blocks_ref = dev.scratch_space<val>(wgs, buffer_type::output);
     auto b128_ref = dev.local_buffer<val>(buffer_type::scratch_space, 128);
     self->send(merge_count, conf_ref, blocks_ref, temp_ref, b128_ref);

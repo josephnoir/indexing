@@ -55,6 +55,29 @@ kernel void create_rids(global uint* config, global uint* input,
  *
  **/
 
+
+// One thread per record
+// TODO: Find fast algorithm
+kernel void ParallelSelection(global const uint* key_in,
+                              global const uint* val_in,
+                              global uint* key_out,
+                              global uint* val_out) {
+  int i = get_global_id(0); // current thread
+  int n = get_global_size(0); // input size
+  uint iKey = key_in[i];
+  uint iVal = val_in[i];
+  // Compute position of in[i] in output
+  int pos = 0;
+  for (int j = 0; j < n;j++) {
+    uint jKey = key_in[j]; // broadcasted
+    bool smaller = (jKey < iKey) || (jKey == iKey && j < i); // in[j] < in[i] ?
+    pos += (smaller) ? 1 : 0;
+  }
+  key_out[pos] = iKey;
+  val_out[pos] = iVal;
+}
+
+
 // N threads
 kernel void ParallelBitonic_A(global const uint * in, global uint * out,
                               int inc, int dir) {
@@ -127,29 +150,6 @@ kernel void ParallelBitonic_B2(global uint * data, int inc, int dir) {
   data[inc] = x1;
 }
 */
-/*
-// adjusted for my argument style
-kernel void ParallelBitonic_B2(global uint* config, global uint * data) {
-  uint inc     = config[0];        // inc phase parameter
-  uint dir     = config[1];        // sort oder 
-  int t        = get_global_id(0); // thread index
-  int low      = t & (inc - 1);    // low order bits (below INC)
-  int i        = (t << 1) - low;   // insert 0 at position INC
-  bool reverse = ((dir & i) == 0); // asc/desc order
-  data        += i;                // translate to first value
-
-  // Load
-  uint x0 = data[  0];
-  uint x1 = data[inc];
-
-  // Sort
-  ORDER(x0, x1)
-
-  // Store
-  data[0  ] = x0;
-  data[inc] = x1;
-}
-*/
 
 kernel void ParallelBitonic_B2(global uint* config, global uint * keys,
                                global uint* values) {
@@ -170,22 +170,12 @@ kernel void ParallelBitonic_B2(global uint* config, global uint * keys,
 
   // Sort
   bool swap = reverse ^ (k0 < k1);
-  // TODO: optmizie this, all the copies may not be neeeded?
-  // instead just assign to keys & values
-  uint tmp_k0 = k0;
-  uint tmp_v0 = v0;
-  uint tmp_k1 = k1;
-  uint tmp_v1 = v1;
-  k0 = (swap) ? tmp_k1 : tmp_k0;
-  v0 = (swap) ? tmp_v1 : tmp_v0;
-  k1 = (swap) ? tmp_k0 : tmp_k1;
-  v1 = (swap) ? tmp_v0 : tmp_v1;
 
   // Store
-  keys  [  0] = k0;
-  values[  0] = v0;
-  keys  [inc] = k1;
-  values[inc] = v1;
+  keys  [  0] = (swap) ? k1 : k0;
+  values[  0] = (swap) ? v1 : v0;
+  keys  [inc] = (swap) ? k0 : k1;
+  values[inc] = (swap) ? v0 : v1;
 }
 
 // N/4 threads

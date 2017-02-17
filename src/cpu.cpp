@@ -309,6 +309,7 @@ void caf_main(actor_system&, const config& cfg) {
   sort_rids_by_value(input, rids);
   produce_chunk_id_literals(rids, chids, lits);
   auto k = merged_lit_by_val_chids(input, chids, lits);
+  cout << "Merged to " << k << " values" << endl;
   produce_fills(input, chids, k);
   vector<uint32_t> index(2 * k);
   auto index_length = fuse_fill_literals(chids, lits, index, k);

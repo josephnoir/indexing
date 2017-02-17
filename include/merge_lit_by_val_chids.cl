@@ -17,6 +17,7 @@ uint compactSIMDPrefixSum(local const uint* dsData, local const uint* dsValid,
                          local uint* dsCompact,    local uint* dsLocalIndex);
 uint exclusivePrescan128(local const uint* in, local uint* outAndTemp);
 
+
 /**
  * Steps
  * - create heads
@@ -28,6 +29,10 @@ uint exclusivePrescan128(local const uint* in, local uint* outAndTemp);
 kernel void create_heads(global uint* keys_high, global uint* keys_low,
                          global uint* heads) {
   uint idx = get_global_id(0);
+  heads[idx] = (idx == 0) ||
+               (keys_high[idx] != keys_high[idx - 1]) ||
+               (keys_low [idx] != keys_low [idx - 1]);
+  /*
   heads[idx] = 0;
   if (idx > 0) {
     if ((keys_high[idx] != keys_high[idx - 1]) ||
@@ -36,6 +41,7 @@ kernel void create_heads(global uint* keys_high, global uint* keys_low,
   } else {
     heads[idx] = 1;
   }
+  */
 }
 
 // somewhat inefficient segmented scan (not really a scan as it stores the
@@ -134,8 +140,8 @@ kernel void countElts(global uint* restrict config,
   const uint gidx = get_group_id(0);
   const uint ngrps = get_num_groups(0);
   const uint lsize = get_local_size(0);
-  const uint epb = len / ngrps + ((len % ngrps) ? 1 : 0); // epb: eltsPerBlock
-  const uint ub  = (len < (gidx + 1) * epb) ? len : ((gidx + 1) * epb);
+  const uint epb = len / ngrps + ((len % ngrps) ? 1 : 0); // elementsPerBlock
+  const uint ub  = (len < (gidx + 1) * epb) ? len : ((gidx + 1) * epb); // upper bound
   dsCount[idx] = 0;
   for (uint base = gidx * epb; base < (gidx + 1) * epb; base += lsize) {
     if ((base + idx) < ub && dgValid[base + idx])
@@ -162,7 +168,7 @@ uint exclusivePrescan128(local const uint* in, local uint* outAndTemp) {
   outAndTemp[pout * N + idx] = (idx > 0) ? in[idx - 1] : 0;
   barrier(CLK_LOCAL_MEM_FENCE);
   for (uint offset = 1; offset < N; offset *= 2) {
-    pout = 1 - pout; // swap double buffer indices
+    pout = 1 - pout; // swap double buffer indexes
     pin  = 1 - pout;
     barrier(CLK_LOCAL_MEM_FENCE);
     outAndTemp[pout * N + idx] = outAndTemp[pin * N + idx];
@@ -197,13 +203,14 @@ kernel void moveValidElementsStaged(global       uint* restrict config,
   uint ngrps = get_num_groups(0);
   uint lsize = get_local_size(0);
   local uint dsLocalIndex[256];
-  int blockOutOffset=0;
+  uint blockOutOffset = 0;
   // Sum up the blockCounts before us to find our offset
   // This is totally inefficient - lots of repeated work b/w blocks,
   // and uneven balancing. Paper implements this as a prefix sum kernel
   // in phase II. May still be faster than an extra kernel invocation?
   for (uint base = 0; base < gidx; base += lsize) {
-    // Load up the count of valid elements for each block before us in batches of 128
+    // Load up the count of valid elements for each block before us 
+    // in batches of 128
     validBlock[idx] = 0;
     if ((base + idx) < gidx)
         validBlock[idx] = dgBlockCounts[base + idx];

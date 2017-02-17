@@ -6,9 +6,9 @@
 
 kernel void produce_chunks(global uint* rids, global uint* chids,
                            global uint* lits) {
-  uint index = get_global_id(0);
-  lits[index] = 1u << (rids[index] % 31u);
-  lits[index] |= 1u << 31;
-  chids[index] = (uint) rids[index] / 31;
+  uint idx = get_global_id(0);
+  lits[idx] = 1u << (rids[idx] % 31u);
+  lits[idx] |= 1u << 31;
+  chids[idx] = (uint) rids[idx] / 31;
 }
 
