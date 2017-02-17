@@ -49,6 +49,7 @@ constexpr const char* kernel_file_05 = "./include/fuse_fill_literals.cl";
 /*
 constexpr const char* kernel_file_06 = "./include/compute_colum_length.cl";
 */
+constexpr const char* kernel_file_07 = "./include/stream_compaction.cl";
 
 //constexpr const char* kernel_name_01a = "kernel_wah_index";
 
@@ -256,7 +257,7 @@ class config : public actor_system_config {
 public:
   string filename = "";
   val bound = 0;
-  string device_name = "GeForce GTX 780M";
+  string device_name = "GeForce GT 650M";
   bool print_results;
   config() {
     load<opencl::manager>();
@@ -321,6 +322,8 @@ void caf_main(actor_system& system, const config& cfg) {
   vector<uint32_t> lits(input.size());
   sort_rids_by_value(input, rids);
   produce_chunk_id_literals(rids, chids, lits);
+  auto k2 = merged_lit_by_val_chids(input, chids, lits);
+  cout << "Created test data" << endl;
 
   // load kernels
   auto prog_rids   = mngr.create_program_from_file(kernel_file_01, "", dev);
@@ -331,6 +334,7 @@ void caf_main(actor_system& system, const config& cfg) {
   /*
   auto prog_colum  = mngr.create_program_from_file(kernel_file_06, "", dev);
   */
+  auto prog_sc     = mngr.create_program_from_file(kernel_file_07, "", dev);
 
   // create spawn configuration
   auto n = values.size();
@@ -367,14 +371,13 @@ void caf_main(actor_system& system, const config& cfg) {
     auto merge_scan = mngr.spawn_phase<vec,vec>(prog_merge,
                                                 "lazy_segmented_scan",
                                                 index_space);
-    auto merge_count = mngr.spawn_phase<vec, vec, vec, vec>(prog_merge,
-                                                            "countElts",
-                                                            index_space_128);
-    auto merge_merge
-      = mngr.spawn_phase<vec,vec,vec,vec,
-                         vec,vec,vec,vec>(prog_merge,
-                                          "moveValidElementsStaged",
-                                          index_space_128);
+    auto sc_count = mngr.spawn_phase<vec,vec,vec,vec>(prog_sc,
+                                                      "countElts",
+                                                      index_space_128);
+    auto sc_move = mngr.spawn_phase<vec,vec,vec,vec,
+                                    vec,vec,vec,vec>(prog_sc,
+                                                     "moveValidElementsStaged",
+                                                     index_space_128);
     auto fills = mngr.spawn_phase<vec,vec,vec,vec>(prog_fills,
                                                    "produce_fills",
                                                    index_space);
@@ -491,15 +494,15 @@ void caf_main(actor_system& system, const config& cfg) {
     conf_ref = dev.global_buffer(buffer_type::input_output, config);
     auto blocks_ref = dev.scratch_space<val>(wgs, buffer_type::output);
     auto b128_ref = dev.local_buffer<val>(buffer_type::scratch_space, 128);
-    self->send(merge_count, conf_ref, blocks_ref, temp_ref, b128_ref);
+    self->send(sc_count, conf_ref, blocks_ref, temp_ref, b128_ref);
     self->receive(
-      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>& ) {
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
         cout << "Count step done." << endl;
       }
     );
     auto out_ref = dev.scratch_space<val>(n, buffer_type::output);
-    self->send(merge_merge, conf_ref,   inpt_ref, out_ref,  temp_ref,
-                            blocks_ref, b128_ref, b128_ref, b128_ref);
+    self->send(sc_move, conf_ref,   inpt_ref, out_ref,  temp_ref,
+                        blocks_ref, b128_ref, b128_ref, b128_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
           mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
@@ -507,7 +510,7 @@ void caf_main(actor_system& system, const config& cfg) {
       }
     );
     inpt_ref.swap(out_ref);
-    self->send(merge_merge, conf_ref, chid_ref, out_ref, temp_ref,
+    self->send(sc_move, conf_ref, chid_ref, out_ref, temp_ref,
                             blocks_ref, b128_ref, b128_ref, b128_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
@@ -516,7 +519,7 @@ void caf_main(actor_system& system, const config& cfg) {
       }
     );
     chid_ref.swap(out_ref);
-    self->send(merge_merge, conf_ref, lits_ref, out_ref, temp_ref,
+    self->send(sc_move, conf_ref, lits_ref, out_ref, temp_ref,
                             blocks_ref, b128_ref, b128_ref, b128_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
@@ -535,7 +538,6 @@ void caf_main(actor_system& system, const config& cfg) {
     valid_or_exit(res_chid);
     valid_or_exit(res_lits);
     auto k = res_conf->at(1);
-    auto k2 = merged_lit_by_val_chids(input, chids, lits);
     valid_or_exit(k == k2);
     vec new_inpt{*res_inpt};
     vec new_chid{*res_chid};
@@ -574,6 +576,45 @@ void caf_main(actor_system& system, const config& cfg) {
         cout << "Prepared index." << endl;
       }
     );
+    // stream compaction using input ad valid
+    // currently newly created actor to change NDRange
+    //auto wi = 128 * (((2 * k) / 128) + (((2 * k) % 128) ? 1 : 0));
+    auto wi = ((2 * k) + 128 - 1) & ~(128 - 1); // only for powers of 2
+    cout << "wi = " << wi << endl;
+    auto index_space_k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
+    sc_count = mngr.spawn_phase<vec,vec,vec,vec>(prog_sc, "countElts",
+                                                 index_space_k_128);
+    sc_move = mngr.spawn_phase<vec,vec,vec,vec,
+                               vec,vec,vec,vec>(prog_sc,
+                                                "moveValidElementsStaged",
+                                                index_space_k_128);
+    cout << "count for idx" << endl;
+    config[0] = k;
+    config[1] = 0;
+    conf_ref = dev.global_buffer(buffer_type::input_output, config);
+    self->send(sc_count, conf_ref, blocks_ref, idx_ref, b128_ref);
+    self->receive(
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
+        cout << "Count step done." << endl;
+      }
+    );
+    out_ref = dev.scratch_space<val>(2 * k, buffer_type::output);
+    self->send(sc_move, conf_ref,   idx_ref,  out_ref,  idx_ref,
+                        blocks_ref, b128_ref, b128_ref, b128_ref);
+    self->receive(
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
+          mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
+        cout << "Merge step done (input)." << endl;
+      }
+    );
+    idx_ref.swap(out_ref);
+    cout << "DONE: fuse_fill_literals." << endl;
+    /*
+    auto idx_conf = conf_ref.data();
+    valid_or_exit(res_conf, "Can't read conf after stream compcation.");
+    auto idx_len = res_conf->at(1);
+    cout << "Created index of length " << idx_len << endl;
+    */
   }
   // clean up
   system.await_all_actors_done();
