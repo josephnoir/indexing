@@ -15,10 +15,13 @@
 kernel void prepare_index(global uint* conf, global uint* chids,
                           global uint* lits, global uint* index) {
   uint idx = get_global_id(0);
-  uint k = conf[1];
+  uint k = conf[0];
   if (idx < k) {
     index[2 * idx    ] = chids[idx];
     index[2 * idx + 1] = lits[idx];
+  } else { // remove this if we shorten the index
+    index[2 * idx    ] = 0;
+    index[2 * idx + 1] = 0;
   }
 }
 

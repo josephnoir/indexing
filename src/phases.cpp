@@ -417,7 +417,6 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // create spawn configuration
   auto n = values.size();
-  auto wgs = dev.get_max_compute_units();
   auto index_space      = spawn_config{dim_vec{n}};
   //auto index_space_half = spawn_config{dim_vec{n / 2}};
   auto index_space_128  = spawn_config{dim_vec{n}, {}, dim_vec{128}};
@@ -571,7 +570,8 @@ void caf_main(actor_system& system, const config& cfg) {
     config[0] = static_cast<val>(n);
     config[1] = 0;
     conf_ref = dev.global_buffer(buffer_type::input_output, config);
-    auto blocks_ref = dev.scratch_space<val>(wgs, buffer_type::output);
+    auto blocks_size = n / 128; // dev.get_max_compute_units();
+    auto blocks_ref = dev.scratch_space<val>(blocks_size, buffer_type::output);
     auto b128_ref = dev.local_buffer<val>(buffer_type::scratch_space, 128);
     self->send(sc_count, conf_ref, blocks_ref, temp_ref, b128_ref);
     self->receive(
@@ -645,20 +645,23 @@ void caf_main(actor_system& system, const config& cfg) {
     new_chid.resize(k);
     valid_or_exit(new_inpt == input, "input not equal");
     valid_or_exit(new_chid == chids_produce, "chids not equal");
+    config.resize(2);
+    config[0] = k;
+    config[1] = 0;
+    conf_ref = dev.global_buffer(buffer_type::input_output, config);
     // TODO: release buffers no longer needed
     // we should reconfigure the NDRange of fuse_prep-actor here to k
-    auto idx_ref = dev.scratch_space<val>(2*k, buffer_type::output);
+    auto idx_ref = dev.scratch_space<val>(2 * k, buffer_type::output);
     self->send(fuse_prep, conf_ref, chid_ref, lits_ref, idx_ref);
     self->receive(
-      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>& ) {
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
         cout << "Prepared index." << endl;
       }
     );
     // stream compaction using input ad valid
     // currently newly created actor to change NDRange
-    //auto wi = 128 * (((2 * k) / 128) + (((2 * k) % 128) ? 1 : 0));
+    // auto wi = 128 * (((2 * k) / 128) + (((2 * k) % 128) ? 1 : 0));
     auto wi = ((2 * k) + 128 - 1) & ~(128 - 1); // only for powers of 2
-    cout << "wi = " << wi << endl;
     auto index_space_k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
     sc_count = mngr.spawn_phase<vec,vec,vec,vec>(prog_sc, "countElts",
                                                  index_space_k_128);
@@ -666,23 +669,22 @@ void caf_main(actor_system& system, const config& cfg) {
                                vec,vec,vec,vec>(prog_sc,
                                                 "moveValidElementsStaged",
                                                 index_space_k_128);
-    cout << "count for idx" << endl;
-    config[0] = k;
-    config[1] = 0;
-    conf_ref = dev.global_buffer(buffer_type::input_output, config);
+    blocks_size = wi / 128; // wgs;
+    blocks_ref = dev.scratch_space<val>(blocks_size, buffer_type::output);
     self->send(sc_count, conf_ref, blocks_ref, idx_ref, b128_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
         cout << "Count step done." << endl;
       }
     );
+    valid_or_exit(res_conf, "Can't read conf after stream count.");
     out_ref = dev.scratch_space<val>(2 * k, buffer_type::output);
     self->send(sc_move, conf_ref,   idx_ref,  out_ref,  idx_ref,
                         blocks_ref, b128_ref, b128_ref, b128_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
           mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
-        cout << "Merge step done (input)." << endl;
+        cout << "Merge step done." << endl;
       }
     );
     idx_ref.swap(out_ref);
