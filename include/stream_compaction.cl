@@ -32,6 +32,13 @@
 
 #define N 128
 
+// prototypes
+uint sumReduce128(local uint* arr);
+uint compactSIMDPrefixSum(local const uint* dsData, local const uint* dsValid,
+                         local uint* dsCompact,    local uint* dsLocalIndex);
+uint exclusivePrescan128(local const uint* in, local uint* outAndTemp);
+
+
 // Phase 1: Count valid elements per thread block
 // Hard-code 128 thd/blk
 uint sumReduce128(local uint* arr) {
@@ -122,7 +129,6 @@ kernel void moveValidElementsStaged(global       uint* restrict config,
                                     local        uint* restrict validBlock,
                                     local        uint* restrict compactBlock) {
   uint len = config[0];
-  // dNumValidElements = config[1]
   uint idx = get_local_id(0);
   uint gidx = get_group_id(0);
   uint ngrps = get_num_groups(0);
@@ -149,7 +155,7 @@ kernel void moveValidElementsStaged(global       uint* restrict config,
   const uint ub = (len < (gidx + 1) * epb) ? len : ((gidx + 1) * epb);
   for (uint base = gidx * epb; base < (gidx + 1) * epb; base += lsize) {
     if ((base + idx) < ub) {
-      validBlock[idx] = dgValid[base + idx];
+      validBlock[idx] = dgValid[base + idx] != 0;
       inBlock[idx] = dgData[base + idx];
     } else {
       validBlock[idx] = 0;
@@ -165,3 +171,4 @@ kernel void moveValidElementsStaged(global       uint* restrict config,
   if (gidx == (ngrps - 1) && idx == 0)
     config[1] = blockOutOffset;
 }
+
