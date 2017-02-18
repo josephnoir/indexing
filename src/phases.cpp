@@ -123,27 +123,7 @@ string decoded_bitmap(const vec& bitmap) {
 /*****************************************************************************\
         TESTS FUNCTIONS ON CPU FOR COMPARISON (TODO: DELTE THIS LATER)
 \*****************************************************************************/
-/*
-vector<val> sort_rids_by_value(vector<val>& input) {
-  vector<val> rids(input.size());
-  iota(begin(rids), end(rids), 0);
-  for (size_t i = (input.size() - 1); i > 0; --i) {
-    for (size_t j = 0; j < i; ++j) {
-      if (input[j] > input[j + 1]) {
-        // switch input
-        auto tmp     = input[j];
-        input[j    ] = input[j + 1];
-        input[j + 1] = tmp;
-        // switch rids
-        tmp         = rids[j    ];
-        rids[j    ] = rids[j + 1];
-        rids[j + 1] = tmp;
-      }
-    }
-  }
-  return rids;
-}
-*/
+
 // in : input
 // out: input, rids (both sorted by input)
 void sort_rids_by_value(vector<uint32_t>& input, vector<uint32_t>& rids) {
@@ -249,6 +229,95 @@ void produce_fills(vector<uint32_t>& input,
   chids = std::move(new_chids);
 }
 
+template<class T>
+size_t stream_compaction(vector<T>& index, T val = 0) {
+  index.erase(remove(begin(index), end(index), val), end(index));
+  return index.size();
+}
+
+// in : chids, lits, k
+// out: index, index_length
+size_t fuse_fill_literals(vector<uint32_t>& chids,
+                          vector<uint32_t>& lits,
+                          vector<uint32_t>& index,
+                          size_t k) {
+  assert(chids.size() == k);
+  assert(lits.size() == k);
+  assert(index.size() >= 2*k);
+  for (size_t i = 0; i < k; ++i) {
+    index[2 * i] = chids[i];
+    index[2 * i + 1] = lits[i];
+  }
+  return stream_compaction(index, 0u);
+}
+
+// Reduce by key for sum operation
+template<class T>
+size_t reduce_by_key(vector<T>& keys, vector<T>& vals) {
+  vector<T> new_keys;
+  vector<T> new_vals;
+  size_t from = 0;
+  while (from < keys.size()) {
+    new_keys.push_back(keys[from]);
+    auto to = from;
+    while (to < keys.size() && keys[to] == keys[from])
+      ++to;
+    /*
+    cout << "Bounds: " << from << " - " << to << endl;
+    for (size_t i = from; i < to; ++i) {
+      cout << as_binary(keys[i]) << " --> " << as_binary(lits[i]) << endl;
+    }
+    */
+    T merged_lit = 0;
+    while (from < to) {
+      merged_lit += vals[from];
+      ++from;
+    }
+    new_vals.push_back(merged_lit);
+  }
+  vals.clear();
+  keys.clear();
+  vals = move(new_vals);
+  keys = move(new_keys);
+  assert(keys.size() == vals.size());
+  return vals.size();
+}
+
+template<class T>
+vector<T> inclusive_scan(const vector<T>& vals) {
+  vector<T> results(vals.size());
+  results[0] = vals[0];
+  for (size_t i = 1; i < vals.size(); ++i) {
+    results[i] = results[i - 1] + vals[i];
+  }
+  return results;
+}
+
+template<class T>
+vector<T> exclusive_scan(const vector<T>& vals) {
+  vector<T> results(vals.size());
+  results[0] = 0;
+  for (size_t i = 1; i < vals.size(); ++i) {
+    results[i] = results[i - 1] + vals[i - 1];
+  }
+  return results;
+}
+
+// in : chids, input, n
+// out: keycnt, offsets
+size_t compute_colum_length(vector<uint32_t>& input,
+                            vector<uint32_t>& chids,
+                            vector<uint32_t>& offsets,
+                            size_t k) {
+  vector<uint32_t> tmp(k);
+  for (size_t i = 0; i < k; ++i) {
+    tmp[i] = (1 + (chids[i] == 0 ? 0 : 1));
+  }
+  auto keycnt = reduce_by_key(input, tmp);
+  offsets = exclusive_scan(tmp);
+  return keycnt;
+}
+
 /*****************************************************************************\
                           INTRODUCE SOME CLI ARGUMENTS
 \*****************************************************************************/
@@ -257,7 +326,7 @@ class config : public actor_system_config {
 public:
   string filename = "";
   val bound = 0;
-  string device_name = "GeForce GT 650M";
+  string device_name = "GeForce GTX 780M";
   bool print_results;
   config() {
     load<opencl::manager>();
@@ -315,15 +384,25 @@ void caf_main(actor_system& system, const config& cfg) {
   }
   auto dev = *opt;
 
-  // For testing
+  // Create test data
   auto input = values;
-  vector<uint32_t> rids(input.size());
-  vector<uint32_t> chids(input.size());
-  vector<uint32_t> lits(input.size());
+  vec rids(input.size());
+  vec chids(input.size());
+  vec lits(input.size());
   sort_rids_by_value(input, rids);
   produce_chunk_id_literals(rids, chids, lits);
-  auto k2 = merged_lit_by_val_chids(input, chids, lits);
-  cout << "Created test data" << endl;
+  auto k_test = merged_lit_by_val_chids(input, chids, lits);
+  vec chids_produce{chids};
+  produce_fills(input, chids_produce, k_test);
+  vec index(2 * k_test);
+  vec chids_fuse{chids_produce};
+  auto index_length = fuse_fill_literals(chids_fuse, lits, index, k_test);
+  vec offsets(k_test);
+  vec input_col{input};
+  auto keycnt = compute_colum_length(input_col, chids_fuse, offsets, k_test);
+  cout << "Created test data." << endl;
+  cout << "Index has " << index_length << " elements with "
+       << keycnt << " keys." << endl;
 
   // load kernels
   auto prog_rids   = mngr.create_program_from_file(kernel_file_01, "", dev);
@@ -538,7 +617,7 @@ void caf_main(actor_system& system, const config& cfg) {
     valid_or_exit(res_chid);
     valid_or_exit(res_lits);
     auto k = res_conf->at(1);
-    valid_or_exit(k == k2);
+    valid_or_exit(k == k_test);
     vec new_inpt{*res_inpt};
     vec new_chid{*res_chid};
     vec new_lits{*res_lits};
@@ -560,13 +639,12 @@ void caf_main(actor_system& system, const config& cfg) {
     res_chid = chid_ref.data();
     valid_or_exit(res_inpt, "destroyed input");
     valid_or_exit(res_chid, "can't read fills");
-    produce_fills(input, chids, k);
     new_inpt = *res_inpt;
     new_chid = *res_chid;
     new_inpt.resize(k);
     new_chid.resize(k);
     valid_or_exit(new_inpt == input, "input not equal");
-    valid_or_exit(new_chid == chids, "chids not equal");
+    valid_or_exit(new_chid == chids_produce, "chids not equal");
     // TODO: release buffers no longer needed
     // we should reconfigure the NDRange of fuse_prep-actor here to k
     auto idx_ref = dev.scratch_space<val>(2*k, buffer_type::output);
@@ -609,8 +687,8 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     idx_ref.swap(out_ref);
     cout << "DONE: fuse_fill_literals." << endl;
-    /*
     auto idx_conf = conf_ref.data();
+    /*
     valid_or_exit(res_conf, "Can't read conf after stream compcation.");
     auto idx_len = res_conf->at(1);
     cout << "Created index of length " << idx_len << endl;

@@ -22,4 +22,7 @@ kernel void prepare_index(global uint* conf, global uint* chids,
   }
 }
 
+/**
+ * Use stream compaction kernel for the rest of this part
+ */
 
