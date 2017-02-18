@@ -11,13 +11,6 @@
  */
 
 
-// prototypes
-uint sumReduce128(local uint* arr);
-uint compactSIMDPrefixSum(local const uint* dsData, local const uint* dsValid,
-                         local uint* dsCompact,    local uint* dsLocalIndex);
-uint exclusivePrescan128(local const uint* in, local uint* outAndTemp);
-
-
 /**
  * Steps
  * - create heads
