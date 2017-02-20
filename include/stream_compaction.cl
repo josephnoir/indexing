@@ -120,7 +120,7 @@ uint compactSIMDPrefixSum(local const uint* dsData, local const uint* dsValid,
 }
 
 // dgValid and dgData may be the same data if we want to keep eveything != 0
-kernel void moveValidElementsStaged(global       uint* restrict config,
+kernel void moveValidElementsStaged(global       uint*          config,
                                     global const uint*          dgData,
                                     global       uint* restrict dgCompact,
                                     global const uint*          dgValid,
@@ -155,7 +155,7 @@ kernel void moveValidElementsStaged(global       uint* restrict config,
   const uint ub = (len < (gidx + 1) * epb) ? len : ((gidx + 1) * epb);
   for (uint base = gidx * epb; base < (gidx + 1) * epb; base += lsize) {
     if ((base + idx) < ub) {
-      validBlock[idx] = dgValid[base + idx] != 0;
+      validBlock[idx] = (dgValid[base + idx] != 0);
       inBlock[idx] = dgData[base + idx];
     } else {
       validBlock[idx] = 0;

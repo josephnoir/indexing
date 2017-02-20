@@ -19,9 +19,6 @@ kernel void prepare_index(global uint* conf, global uint* chids,
   if (idx < k) {
     index[2 * idx    ] = chids[idx];
     index[2 * idx + 1] = lits[idx];
-  } else { // remove this if we shorten the index
-    index[2 * idx    ] = 0;
-    index[2 * idx + 1] = 0;
   }
 }
 

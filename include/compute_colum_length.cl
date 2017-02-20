@@ -12,23 +12,42 @@
  *
  */
 
+/**
+ * Steps
+ * - create_tmp_array
+ * - lazy_segmented_scan (SUM)
+ * - stream compaction to reduce all that have a 0 in heads?
+ * - exclusive scan on the tmp array
+ * (There is probably a more efficient solution for segmented scan)
+ */
+
+kernel void colum_prepare(global uint* chids, global uint* tmp,
+                          global uint* input, global uint* heads) {
+  uint idx = get_global_id(0);
+  tmp[idx] = 1 + (chids[idx] != 0);
+  // create heads array for next steps
+  heads[idx] = (idx == 0) || (input[idx] != input[idx - 1]);
+}
+
+// somewhat inefficient segmented scan (not really a scan as it stores the
+// accumulated value at the beginning of the segment)
+kernel void lazy_segmented_scan(global uint* heads, global uint* data) {
+  uint idx = get_global_id(0);
+  uint maximum = get_global_size(0);
+  if (heads[idx] != 0) {
+    uint val = data[idx];
+    uint curr = idx + 1;
+    while (heads[curr] == 0 && curr < maximum) {
+      val += data[curr]; // SUM operation
+      curr += 1;
+    }
+    data[idx] = val;
+  }
+}
 
 /*
-size_t compute_colum_length(global uint* input, global uint* chids,
-                            global uint* offsets, size_t li, size_t work_size) {
-  local uint tmp[WORK_GROUP_SIZE];
-  tmp[li] = (1 + (chids[li] != 0)); // ? 0 : 1));
-  barrier(FENCE_TYPE);
-  uint keycnt = reduce_by_key_SUM(input, tmp, li, work_size);
-  // inclusive scan to create offsets, should be parallel
-  offsets[li] = 0;
-  barrier(FENCE_TYPE);
-  if (li == 0) {
-    for (uint i = 1; i < keycnt; ++i) {
-      offsets[i] = offsets[i - 1] + tmp[i - 1];
-    }
-  }
-  barrier(FENCE_TYPE);
-  return keycnt;
-}
-*/
+ * Use the stream compaction in the related .cl files
+ */
+
+// TODO: exclusive scan algorithm
+

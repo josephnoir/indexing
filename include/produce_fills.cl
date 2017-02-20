@@ -12,7 +12,7 @@
  */
 
 kernel void produce_fills(global uint* config, global uint* input,
-                          global uint* chids, global uint* output) {
+                          global uint* chids,  global uint* output) {
   uint k = config[1];
   uint idx = get_global_id(0);
   if (idx < k) {
@@ -20,5 +20,13 @@ kernel void produce_fills(global uint* config, global uint* input,
                 ? chids[idx] - chids[idx - 1] - 1
                 : chids[idx];
   }
+  /*
+  if (idx < k) {
+    if (idx != 0 && input[idx] == input[idx - 1])
+      output[idx] = chids[idx] - chids[idx - 1] - 1;
+    else
+      output[idx] = chids[idx];
+  }
+  */
 }
 

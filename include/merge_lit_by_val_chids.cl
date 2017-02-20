@@ -14,9 +14,9 @@
 /**
  * Steps
  * - create heads
- * - lazy_segmented_scan
+ * - lazy_segmented_scan (with OR operation)
  * - stream compaction to reduce all that have a 0 in heads?
- * (There is probably a more efficient solution)
+ * (There is probably a more efficient solution for segmented scan)
  */
 
 kernel void create_heads(global uint* keys_high, global uint* keys_low,

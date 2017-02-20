@@ -46,9 +46,7 @@ constexpr const char* kernel_file_02 = "./include/produce_chunk_id_literals.cl";
 constexpr const char* kernel_file_03 = "./include/merge_lit_by_val_chids.cl";
 constexpr const char* kernel_file_04 = "./include/produce_fills.cl";
 constexpr const char* kernel_file_05 = "./include/fuse_fill_literals.cl";
-/*
 constexpr const char* kernel_file_06 = "./include/compute_colum_length.cl";
-*/
 constexpr const char* kernel_file_07 = "./include/stream_compaction.cl";
 
 //constexpr const char* kernel_name_01a = "kernel_wah_index";
@@ -326,7 +324,7 @@ class config : public actor_system_config {
 public:
   string filename = "";
   val bound = 0;
-  string device_name = "GeForce GTX 780M";
+  string device_name = "GeForce GT 650M";
   bool print_results;
   config() {
     load<opencl::manager>();
@@ -410,9 +408,7 @@ void caf_main(actor_system& system, const config& cfg) {
   auto prog_merge  = mngr.create_program_from_file(kernel_file_03, "", dev);
   auto prog_fills  = mngr.create_program_from_file(kernel_file_04, "", dev);
   auto prog_fuse   = mngr.create_program_from_file(kernel_file_05, "", dev);
-  /*
   auto prog_colum  = mngr.create_program_from_file(kernel_file_06, "", dev);
-  */
   auto prog_sc     = mngr.create_program_from_file(kernel_file_07, "", dev);
 
   // create spawn configuration
@@ -423,11 +419,11 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // buffers for execution
   vec config{static_cast<val>(n)};
-  auto inpt_ref = dev.global_buffer(buffer_type::input_output, values);
+  auto inpt_ref = dev.global_argument(values, buffer_type::input_output);
   // TODO: should be scratch space, but output is useful for testing
-  auto chid_ref = dev.scratch_space<val>(n, buffer_type::output);
-  auto lits_ref = dev.scratch_space<val>(n, buffer_type::output);
-  auto temp_ref = dev.scratch_space<val>(n, buffer_type::output);
+  auto chid_ref = dev.scratch_argument<val>(n, buffer_type::output);
+  auto lits_ref = dev.scratch_argument<val>(n, buffer_type::output);
+  auto temp_ref = dev.scratch_argument<val>(n, buffer_type::output);
   {
     // create phases
     auto rids_1 = mngr.spawn_phase<vec, vec, vec>(prog_rids, "create_rids",
@@ -465,7 +461,7 @@ void caf_main(actor_system& system, const config& cfg) {
     // kernel executions
     // temp_ref used as rids buffer
     scoped_actor self{system};
-    auto conf_ref = dev.global_buffer(buffer_type::input, config);
+    auto conf_ref = dev.global_argument(config, buffer_type::input);
     self->send(rids_1, conf_ref, inpt_ref, temp_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
@@ -482,15 +478,15 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     inpt_ref = chid_ref;
     temp_ref = lits_ref;
-    chid_ref = dev.scratch_space<val>(n, buffer_type::output);
-    lits_ref = dev.scratch_space<val>(n, buffer_type::output);
+    chid_ref = dev.scratch_argument<val>(n, buffer_type::output);
+    lits_ref = dev.scratch_argument<val>(n, buffer_type::output);
     /*
     for (val length = 1; length < values.size(); length <<= 1) {
       int inc = length;
       bool done = false;
       config[0] = inc;
       config[1] = length << 1;
-      conf_ref = dev.global_buffer(buffer_type::input, config);
+      conf_ref = dev.global_argument(config, buffer_type::input);
       self->send(rids_2, conf_ref, inpt_ref, temp_ref);
       self->receive_while([&] { return !done; })(
         [&](mem_ref<val>& conf, mem_ref<val>& vals,
@@ -498,7 +494,7 @@ void caf_main(actor_system& system, const config& cfg) {
           inc >>= 1;
           if (inc > 0) {
             config[0] = inc;
-            conf = dev.global_buffer(buffer_type::input, config);
+            conf = dev.global_argument(config, buffer_type::input);
             self->send(rids_2, conf, vals, rids);
           } else {
             done = true;
@@ -569,17 +565,18 @@ void caf_main(actor_system& system, const config& cfg) {
     // stream compact inpt, chid, lits by heads value
     config[0] = static_cast<val>(n);
     config[1] = 0;
-    conf_ref = dev.global_buffer(buffer_type::input_output, config);
+    conf_ref = dev.global_argument(config, buffer_type::input_output);
     auto blocks_size = n / 128; // dev.get_max_compute_units();
-    auto blocks_ref = dev.scratch_space<val>(blocks_size, buffer_type::output);
-    auto b128_ref = dev.local_buffer<val>(buffer_type::scratch_space, 128);
+    auto blocks_ref = dev.scratch_argument<val>(blocks_size,
+                                                buffer_type::output);
+    auto b128_ref = dev.local_argument<val>(128);
     self->send(sc_count, conf_ref, blocks_ref, temp_ref, b128_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
         cout << "Count step done." << endl;
       }
     );
-    auto out_ref = dev.scratch_space<val>(n, buffer_type::output);
+    auto out_ref = dev.scratch_argument<val>(n, buffer_type::output);
     self->send(sc_move, conf_ref,   inpt_ref, out_ref,  temp_ref,
                         blocks_ref, b128_ref, b128_ref, b128_ref);
     self->receive(
@@ -590,7 +587,7 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     inpt_ref.swap(out_ref);
     self->send(sc_move, conf_ref, chid_ref, out_ref, temp_ref,
-                            blocks_ref, b128_ref, b128_ref, b128_ref);
+                        blocks_ref, b128_ref, b128_ref, b128_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
           mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
@@ -599,7 +596,7 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     chid_ref.swap(out_ref);
     self->send(sc_move, conf_ref, lits_ref, out_ref, temp_ref,
-                            blocks_ref, b128_ref, b128_ref, b128_ref);
+                        blocks_ref, b128_ref, b128_ref, b128_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
           mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
@@ -648,37 +645,49 @@ void caf_main(actor_system& system, const config& cfg) {
     config.resize(2);
     config[0] = k;
     config[1] = 0;
-    conf_ref = dev.global_buffer(buffer_type::input_output, config);
+    conf_ref = dev.global_argument(config);
     // TODO: release buffers no longer needed
     // we should reconfigure the NDRange of fuse_prep-actor here to k
-    auto idx_ref = dev.scratch_space<val>(2 * k, buffer_type::output);
+    auto idx_ref = dev.scratch_argument<val>(2 * k, buffer_type::output);
     self->send(fuse_prep, conf_ref, chid_ref, lits_ref, idx_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
         cout << "Prepared index." << endl;
       }
     );
+    auto idx_res = idx_ref.data();
+    valid_or_exit(idx_res, "Index preparation glitched.");
+    /*
+    int sum = 0;
+    for (size_t i = 0; i < idx_res->size(); ++i) {
+      sum += (idx_res->at(i) != 0 ? 1 : 0);
+    }
+    cout << "Sum is " << sum << endl;
+    */
     // stream compaction using input ad valid
     // currently newly created actor to change NDRange
     // auto wi = 128 * (((2 * k) / 128) + (((2 * k) % 128) ? 1 : 0));
     auto wi = ((2 * k) + 128 - 1) & ~(128 - 1); // only for powers of 2
-    auto index_space_k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
+    auto index_space_2k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
     sc_count = mngr.spawn_phase<vec,vec,vec,vec>(prog_sc, "countElts",
-                                                 index_space_k_128);
+                                                 index_space_2k_128);
     sc_move = mngr.spawn_phase<vec,vec,vec,vec,
                                vec,vec,vec,vec>(prog_sc,
                                                 "moveValidElementsStaged",
-                                                index_space_k_128);
+                                                index_space_2k_128);
     blocks_size = wi / 128; // wgs;
-    blocks_ref = dev.scratch_space<val>(blocks_size, buffer_type::output);
+    blocks_ref = dev.scratch_argument<val>(blocks_size, buffer_type::output);
+    config.resize(2);
+    config[0] = 2 * k;
+    config[1] = 0;
+    conf_ref = dev.global_argument(config);
     self->send(sc_count, conf_ref, blocks_ref, idx_ref, b128_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
         cout << "Count step done." << endl;
       }
     );
-    valid_or_exit(res_conf, "Can't read conf after stream count.");
-    out_ref = dev.scratch_space<val>(2 * k, buffer_type::output);
+    out_ref = dev.scratch_argument<val>(2 * k, buffer_type::output);
     self->send(sc_move, conf_ref,   idx_ref,  out_ref,  idx_ref,
                         blocks_ref, b128_ref, b128_ref, b128_ref);
     self->receive(
@@ -690,11 +699,72 @@ void caf_main(actor_system& system, const config& cfg) {
     idx_ref.swap(out_ref);
     cout << "DONE: fuse_fill_literals." << endl;
     auto idx_conf = conf_ref.data();
-    /*
-    valid_or_exit(res_conf, "Can't read conf after stream compcation.");
-    auto idx_len = res_conf->at(1);
-    cout << "Created index of length " << idx_len << endl;
-    */
+    valid_or_exit(res_conf, "Can't read conf after stream compaction.");
+    auto conf = *idx_conf;
+    auto idx_len = conf[1];
+    valid_or_exit(index_length == idx_len, "Lengths don't match");
+    cout << "Created index of length " << idx_len << "." << endl;
+    auto idx_idx = idx_ref.data(idx_len);
+    valid_or_exit(idx_idx, "Can't read index after stream compaction.");
+    auto idx = *idx_idx;
+    // next step: compute_colum_length
+    out_ref = dev.scratch_argument<val>(k, buffer_type::output);
+    auto heads_ref = dev.scratch_argument<val>(k, buffer_type::output);
+    auto index_space_k = spawn_config{dim_vec{k}};
+    auto col_prep = mngr.spawn_phase<vec,vec,vec,vec>(prog_colum,
+                                                      "colum_prepare",
+                                                      index_space_k);
+    auto col_scan = mngr.spawn_phase<vec,vec>(prog_colum,
+                                              "lazy_segmented_scan",
+                                              index_space_k);
+    wi = ((k) + 128 - 1) & ~(128 - 1); // only for powers of 2
+    auto index_space_k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
+    sc_count = mngr.spawn_phase<vec,vec,vec,vec>(prog_sc, "countElts",
+                                                 index_space_k_128);
+    sc_move = mngr.spawn_phase<vec,vec,vec,vec,
+                               vec,vec,vec,vec>(prog_sc,
+                                                "moveValidElementsStaged",
+                                                index_space_k_128);
+    // temp  -> the tmp array used by the algorithm
+    // heads -> stores the heads array for the stream compaction
+    self->send(col_prep, chid_ref, temp_ref, inpt_ref, heads_ref);
+    self->receive(
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
+        cout << "Col: prepare done." << endl;
+      }
+    );
+    self->send(col_scan, heads_ref, temp_ref);
+    self->receive(
+      [&](mem_ref<val>&, mem_ref<val>&) {
+        cout << "Col: scan done." << endl;
+      }
+    );
+    config.resize(2);
+    config[0] = k;
+    config[1] = 0;
+    conf_ref = dev.global_argument(config);
+    self->send(sc_count, conf_ref, blocks_ref, heads_ref, b128_ref);
+    self->receive(
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
+        cout << "Count step done." << endl;
+      }
+    );
+    self->send(sc_move, conf_ref,   temp_ref, out_ref,  heads_ref,
+                        blocks_ref, b128_ref, b128_ref, b128_ref);
+    self->receive(
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
+          mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
+        cout << "Merge step done." << endl;
+      }
+    );
+    temp_ref.swap(out_ref);
+    idx_conf = conf_ref.data();
+    valid_or_exit(res_conf, "Can't read conf after stream compaction.");
+    conf = *idx_conf;
+    auto keycount = conf[1];
+    valid_or_exit(keycnt == keycount, "Different amount of keys.");
+    cout << "Index has " << keycount << " keys." << endl;
+    // missing: exclusive scan over temp_ref
   }
   // clean up
   system.await_all_actors_done();
