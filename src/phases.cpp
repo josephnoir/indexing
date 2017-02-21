@@ -48,6 +48,7 @@ constexpr const char* kernel_file_04 = "./include/produce_fills.cl";
 constexpr const char* kernel_file_05 = "./include/fuse_fill_literals.cl";
 constexpr const char* kernel_file_06 = "./include/compute_colum_length.cl";
 constexpr const char* kernel_file_07 = "./include/stream_compaction.cl";
+constexpr const char* kernel_file_08 = "./include/scan.cl";
 
 //constexpr const char* kernel_name_01a = "kernel_wah_index";
 
@@ -324,7 +325,7 @@ class config : public actor_system_config {
 public:
   string filename = "";
   val bound = 0;
-  string device_name = "GeForce GT 650M";
+  string device_name = "GeForce GTX 780M";
   bool print_results;
   config() {
     load<opencl::manager>();
@@ -410,6 +411,7 @@ void caf_main(actor_system& system, const config& cfg) {
   auto prog_fuse   = mngr.create_program_from_file(kernel_file_05, "", dev);
   auto prog_colum  = mngr.create_program_from_file(kernel_file_06, "", dev);
   auto prog_sc     = mngr.create_program_from_file(kernel_file_07, "", dev);
+  auto prog_es     = mngr.create_program_from_file(kernel_file_08, "", dev);
 
   // create spawn configuration
   auto n = values.size();
@@ -765,6 +767,81 @@ void caf_main(actor_system& system, const config& cfg) {
     valid_or_exit(keycnt == keycount, "Different amount of keys.");
     cout << "Index has " << keycount << " keys." << endl;
     // missing: exclusive scan over temp_ref
+    config.resize(2);
+    config[0] = keycnt;
+    config[1] = 0;
+    conf_ref = dev.global_argument(config);
+    auto lazy_scan = mngr.spawn_phase<vec,vec,vec>(prog_es, "lazy_scan",
+                                                   spawn_config{dim_vec{1}});
+    auto off_ref = dev.scratch_argument<val>(k, buffer_type::output);
+    self->send(lazy_scan, conf_ref, temp_ref, off_ref);
+    self->receive(
+      [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
+        cout << "Lazy scan done." << endl;
+      }
+    );
+    auto offs_opt = off_ref.data(keycnt);
+/*
+    auto scan_up = mngr.spawn_phase<vec,vec>(prog_es, "upsweep", index_space_k);
+    auto scan_null = mngr.spawn_phase<vec,vec>(prog_es, "null_last",
+                                               spawn_config{dim_vec{1}});
+    auto scan_down = mngr.spawn_phase<vec,vec>(prog_es, "downsweep",
+                                               index_space_k);
+    vec test_scan(k);
+    std::iota(begin(test_scan), end(test_scan), 0u);
+    temp_ref = dev.global_argument(test_scan);
+    auto d = 0;
+    config.resize(2);
+    config[0] = k;
+    config[1] = static_cast<val>(d);
+    conf_ref = dev.global_argument(config);
+    self->send(scan_up, conf_ref, temp_ref);
+    auto done = false;
+    const auto bound = (std::log(k) / std::log(2)) - 1;
+    self->receive_while([&] { return !done; })(
+      [&](mem_ref<val>& conf, mem_ref<val>& temp) {
+        d = d + 1;
+        if (d <= bound) {
+          config[1] = static_cast<val>(d);
+          conf = dev.global_argument(config);
+          self->send(scan_up, conf, temp);
+        } else {
+          done = true;
+        }
+      }
+    );
+    cout << "Scan: upsweep done." << endl;
+    self->send(scan_null, conf_ref, temp_ref);
+    self->receive(
+      [&](mem_ref<val>&, mem_ref<val>&) {
+        cout << "Scan: null last done." << endl;
+      }
+    );
+    d = bound; // (std::log(k) / std::log(2)) - 1;
+    config.resize(2);
+    config[0] = k;
+    config[1] = static_cast<val>(d);
+    conf_ref = dev.global_argument(config);
+    self->send(scan_down, conf_ref, temp_ref);
+    done = false;
+    self->receive_while([&] { return !done; })(
+      [&](mem_ref<val>& conf, mem_ref<val>& temp) {
+        d = d - 1;
+        if (d >= 0) {
+          config[1] = static_cast<val>(d);
+          conf = dev.global_argument(config);
+          self->send(scan_down, conf, temp);
+        } else {
+          done = true;
+        }
+      }
+    );
+    cout << "Scan: upsweep done." << endl;
+    auto offs_opt = temp_ref.data();
+*/
+    valid_or_exit(offs_opt, "Can't read offsets back.");
+    auto offs = *offs_opt;
+    valid_or_exit(offs == offsets, "Offsets differ.");
   }
   // clean up
   system.await_all_actors_done();
