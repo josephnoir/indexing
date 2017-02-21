@@ -122,7 +122,7 @@ string decoded_bitmap(const vec& bitmap) {
 /*****************************************************************************\
         TESTS FUNCTIONS ON CPU FOR COMPARISON (TODO: DELTE THIS LATER)
 \*****************************************************************************/
-
+/*
 // in : input
 // out: input, rids (both sorted by input)
 void sort_rids_by_value(vector<uint32_t>& input, vector<uint32_t>& rids) {
@@ -173,13 +173,6 @@ size_t reduce_by_key(vector<T>& input, vector<T>& chids, vector<T>& lits) {
     auto to = from;
     while (to < max && input[to] == input[from] && chids[to] == chids[from])
       ++to;
-    /*
-    cout << "Bounds: " << from << " - " << to << endl;
-    for (size_t i = from; i < to; ++i) {
-      cout << as_binary(input[i]) << as_binary(chids[i])
-           << " --> " << as_binary(lits[i]) << endl;
-    }
-    */
     T merged_lit = 0;
     while (from < to) {
       merged_lit |= lits[from];
@@ -261,12 +254,6 @@ size_t reduce_by_key(vector<T>& keys, vector<T>& vals) {
     auto to = from;
     while (to < keys.size() && keys[to] == keys[from])
       ++to;
-    /*
-    cout << "Bounds: " << from << " - " << to << endl;
-    for (size_t i = from; i < to; ++i) {
-      cout << as_binary(keys[i]) << " --> " << as_binary(lits[i]) << endl;
-    }
-    */
     T merged_lit = 0;
     while (from < to) {
       merged_lit += vals[from];
@@ -316,6 +303,7 @@ size_t compute_colum_length(vector<uint32_t>& input,
   offsets = exclusive_scan(tmp);
   return keycnt;
 }
+*/
 
 /*****************************************************************************\
                           INTRODUCE SOME CLI ARGUMENTS
@@ -383,6 +371,7 @@ void caf_main(actor_system& system, const config& cfg) {
   }
   auto dev = *opt;
 
+  /*
   // Create test data
   auto input = values;
   vec rids(input.size());
@@ -402,6 +391,7 @@ void caf_main(actor_system& system, const config& cfg) {
   cout << "Created test data." << endl;
   cout << "Index has " << index_length << " elements with "
        << keycnt << " keys." << endl;
+  */
 
   // load kernels
   auto prog_rids   = mngr.create_program_from_file(kernel_file_01, "", dev);
@@ -415,7 +405,7 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // create spawn configuration
   auto n = values.size();
-  auto index_space      = spawn_config{dim_vec{n}};
+  auto index_space = spawn_config{dim_vec{n}};
   //auto index_space_half = spawn_config{dim_vec{n / 2}};
   auto index_space_128  = spawn_config{dim_vec{n}, {}, dim_vec{128}};
 
@@ -427,6 +417,7 @@ void caf_main(actor_system& system, const config& cfg) {
   auto lits_ref = dev.scratch_argument<val>(n, buffer_type::output);
   auto temp_ref = dev.scratch_argument<val>(n, buffer_type::output);
   {
+    auto start = high_resolution_clock::now();
     // create phases
     auto rids_1 = mngr.spawn_phase<vec, vec, vec>(prog_rids, "create_rids",
                                                   index_space);
@@ -505,7 +496,7 @@ void caf_main(actor_system& system, const config& cfg) {
       );
     }
     */
-    cout << "DONE: sort_rids_by_value" << endl;
+    //cout << "DONE: sort_rids_by_value" << endl;
     /*
     auto inpt_exp = inpt_ref.data();
     auto rids_exp = temp_ref.data();
@@ -523,7 +514,8 @@ void caf_main(actor_system& system, const config& cfg) {
     */
     self->send(chunks, temp_ref, chid_ref, lits_ref);
     self->receive(
-      [&](mem_ref<val>&, mem_ref<val>& chid_r, mem_ref<val>& lit_r) {
+      [&](mem_ref<val>&, mem_ref<val>& /*chid_r*/, mem_ref<val>& /*lit_r*/) {
+        /*
         cout << "DONE: produce_chunk_id_literals" << endl;
         auto in_exp = inpt_ref.data();
         auto ch_exp = chid_r.data();
@@ -537,19 +529,20 @@ void caf_main(actor_system& system, const config& cfg) {
         cout << "Input equal: " << (in == input) << endl;
         cout << "Chids equal: " << (ch == chids) << endl;
         cout << "Lits  equal: " << (li == lits) << endl;
+        */
       }
     );
     // use temp as heads array
     self->send(merge_heads, inpt_ref, chid_ref, temp_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
-        cout << "Created heads array" << endl;
+       // cout << "Created heads array" << endl;
       }
     );
     self->send(merge_scan, temp_ref, lits_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&) {
-        cout << "Merged values" << endl;
+        //cout << "Merged values" << endl;
         /*
         auto res1 = heads.data();
         auto res2 = lits.data();
@@ -575,7 +568,7 @@ void caf_main(actor_system& system, const config& cfg) {
     self->send(sc_count, conf_ref, blocks_ref, temp_ref, b128_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
-        cout << "Count step done." << endl;
+        //cout << "Count step done." << endl;
       }
     );
     auto out_ref = dev.scratch_argument<val>(n, buffer_type::output);
@@ -584,7 +577,7 @@ void caf_main(actor_system& system, const config& cfg) {
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
           mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
-        cout << "Merge step done (input)." << endl;
+        //cout << "Merge step done (input)." << endl;
       }
     );
     inpt_ref.swap(out_ref);
@@ -593,7 +586,7 @@ void caf_main(actor_system& system, const config& cfg) {
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
           mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
-        cout << "Merge step done (chids)." << endl;
+        //cout << "Merge step done (chids)." << endl;
       }
     );
     chid_ref.swap(out_ref);
@@ -602,12 +595,13 @@ void caf_main(actor_system& system, const config& cfg) {
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
           mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
-        cout << "Merge step done (lits)." << endl;
+        //cout << "Merge step done (lits)." << endl;
       }
     );
     lits_ref.swap(out_ref);
-    cout << "DONE: merged_lit_by_val_chids." << endl;
+    // cout << "DONE: merged_lit_by_val_chids." << endl;
     auto res_conf = conf_ref.data();
+    /*
     auto res_inpt = inpt_ref.data();
     auto res_chid = chid_ref.data();
     auto res_lits = lits_ref.data();
@@ -615,7 +609,9 @@ void caf_main(actor_system& system, const config& cfg) {
     valid_or_exit(res_inpt);
     valid_or_exit(res_chid);
     valid_or_exit(res_lits);
+    */
     auto k = res_conf->at(1);
+    /*
     valid_or_exit(k == k_test);
     vec new_inpt{*res_inpt};
     vec new_chid{*res_chid};
@@ -626,14 +622,16 @@ void caf_main(actor_system& system, const config& cfg) {
     valid_or_exit(new_inpt == input, "input not equal");
     valid_or_exit(new_chid == chids, "chids not equal");
     valid_or_exit(new_lits == lits, "lits not equal");
+    */
     // we should reconfigure the NDRange of fills-actor here to k
     self->send(fills, conf_ref, inpt_ref, chid_ref, out_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>& ) {
-        cout << "DONE: produce fills." << endl;
+        //cout << "DONE: produce fills." << endl;
       }
     );
     chid_ref.swap(out_ref);
+    /*
     res_inpt = inpt_ref.data();
     res_chid = chid_ref.data();
     valid_or_exit(res_inpt, "destroyed input");
@@ -644,6 +642,7 @@ void caf_main(actor_system& system, const config& cfg) {
     new_chid.resize(k);
     valid_or_exit(new_inpt == input, "input not equal");
     valid_or_exit(new_chid == chids_produce, "chids not equal");
+    */
     config.resize(2);
     config[0] = k;
     config[1] = 0;
@@ -654,18 +653,11 @@ void caf_main(actor_system& system, const config& cfg) {
     self->send(fuse_prep, conf_ref, chid_ref, lits_ref, idx_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
-        cout << "Prepared index." << endl;
+        //cout << "Prepared index." << endl;
       }
     );
-    auto idx_res = idx_ref.data();
-    valid_or_exit(idx_res, "Index preparation glitched.");
-    /*
-    int sum = 0;
-    for (size_t i = 0; i < idx_res->size(); ++i) {
-      sum += (idx_res->at(i) != 0 ? 1 : 0);
-    }
-    cout << "Sum is " << sum << endl;
-    */
+    //auto idx_res = idx_ref.data();
+    //valid_or_exit(idx_res, "Index preparation glitched.");
     // stream compaction using input ad valid
     // currently newly created actor to change NDRange
     // auto wi = 128 * (((2 * k) / 128) + (((2 * k) % 128) ? 1 : 0));
@@ -686,7 +678,7 @@ void caf_main(actor_system& system, const config& cfg) {
     self->send(sc_count, conf_ref, blocks_ref, idx_ref, b128_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
-        cout << "Count step done." << endl;
+        //cout << "Count step done." << endl;
       }
     );
     out_ref = dev.scratch_argument<val>(2 * k, buffer_type::output);
@@ -695,19 +687,19 @@ void caf_main(actor_system& system, const config& cfg) {
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
           mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
-        cout << "Merge step done." << endl;
+        //cout << "Merge step done." << endl;
       }
     );
     idx_ref.swap(out_ref);
-    cout << "DONE: fuse_fill_literals." << endl;
+    //cout << "DONE: fuse_fill_literals." << endl;
     auto idx_conf = conf_ref.data();
-    valid_or_exit(res_conf, "Can't read conf after stream compaction.");
+    //valid_or_exit(res_conf, "Can't read conf after stream compaction.");
     auto conf = *idx_conf;
     auto idx_len = conf[1];
-    valid_or_exit(index_length == idx_len, "Lengths don't match");
+    //valid_or_exit(index_length == idx_len, "Lengths don't match");
     cout << "Created index of length " << idx_len << "." << endl;
     auto idx_idx = idx_ref.data(idx_len);
-    valid_or_exit(idx_idx, "Can't read index after stream compaction.");
+    //valid_or_exit(idx_idx, "Can't read index after stream compaction.");
     auto idx = *idx_idx;
     // next step: compute_colum_length
     out_ref = dev.scratch_argument<val>(k, buffer_type::output);
@@ -732,13 +724,13 @@ void caf_main(actor_system& system, const config& cfg) {
     self->send(col_prep, chid_ref, temp_ref, inpt_ref, heads_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
-        cout << "Col: prepare done." << endl;
+        //cout << "Col: prepare done." << endl;
       }
     );
     self->send(col_scan, heads_ref, temp_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&) {
-        cout << "Col: scan done." << endl;
+        //cout << "Col: scan done." << endl;
       }
     );
     config.resize(2);
@@ -748,7 +740,7 @@ void caf_main(actor_system& system, const config& cfg) {
     self->send(sc_count, conf_ref, blocks_ref, heads_ref, b128_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
-        cout << "Count step done." << endl;
+        //cout << "Count step done." << endl;
       }
     );
     self->send(sc_move, conf_ref,   temp_ref, out_ref,  heads_ref,
@@ -756,19 +748,19 @@ void caf_main(actor_system& system, const config& cfg) {
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
           mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
-        cout << "Merge step done." << endl;
+        //cout << "Merge step done." << endl;
       }
     );
     temp_ref.swap(out_ref);
     idx_conf = conf_ref.data();
-    valid_or_exit(res_conf, "Can't read conf after stream compaction.");
+    //valid_or_exit(res_conf, "Can't read conf after stream compaction.");
     conf = *idx_conf;
     auto keycount = conf[1];
-    valid_or_exit(keycnt == keycount, "Different amount of keys.");
+    //valid_or_exit(keycnt == keycount, "Different amount of keys.");
     cout << "Index has " << keycount << " keys." << endl;
     // missing: exclusive scan over temp_ref
     config.resize(2);
-    config[0] = keycnt;
+    config[0] = keycount;
     config[1] = 0;
     conf_ref = dev.global_argument(config);
     auto lazy_scan = mngr.spawn_phase<vec,vec,vec>(prog_es, "lazy_scan",
@@ -777,10 +769,10 @@ void caf_main(actor_system& system, const config& cfg) {
     self->send(lazy_scan, conf_ref, temp_ref, off_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&) {
-        cout << "Lazy scan done." << endl;
+        //cout << "Lazy scan done." << endl;
       }
     );
-    auto offs_opt = off_ref.data(keycnt);
+    auto offs_opt = off_ref.data(keycount);
 /*
     auto scan_up = mngr.spawn_phase<vec,vec>(prog_es, "upsweep", index_space_k);
     auto scan_null = mngr.spawn_phase<vec,vec>(prog_es, "null_last",
@@ -839,9 +831,17 @@ void caf_main(actor_system& system, const config& cfg) {
     cout << "Scan: upsweep done." << endl;
     auto offs_opt = temp_ref.data();
 */
-    valid_or_exit(offs_opt, "Can't read offsets back.");
+    //valid_or_exit(offs_opt, "Can't read offsets back.");
     auto offs = *offs_opt;
-    valid_or_exit(offs == offsets, "Offsets differ.");
+    // idx_len --> length of index
+    // keycount --> number of keys
+    // idx --> contains index
+    // offs --> contains offsets
+    //valid_or_exit(offs == offsets, "Offsets differ.");
+    auto stop = high_resolution_clock::now();
+    cout << "Time: '"
+         << duration_cast<milliseconds>(stop - start).count()
+         << "' ms" << endl;
   }
   // clean up
   system.await_all_actors_done();
