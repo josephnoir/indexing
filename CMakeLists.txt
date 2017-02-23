@@ -72,7 +72,7 @@ find_package(VAST)
 if (VAST_FOUND)
   include_directories(${VAST_INCLUDE_DIRS})
 else ()
-  message(FATAL_ERROR "Could not find VAST")
+  message(STATUS "Could not find VAST")
 endif ()
 
 find_package(OpenCL REQUIRED)
@@ -137,6 +137,7 @@ target_link_libraries(phases
   ${OpenCL_LIBRARIES}
 )
 
+if (VAST_FOUND)
 add_executable(vst
   ${SOURCES_VAST}
   ${HEADERS}
@@ -148,6 +149,7 @@ target_link_libraries(vst
   ${CAF_LIBRARY_IO}
   ${VAST_LIBRARY}
 )
+endif()
 
 add_executable(generator
   ${SOURCE_GENERATOR}
