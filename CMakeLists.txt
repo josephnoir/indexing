@@ -97,6 +97,9 @@ set(SOURCE_GENERATOR
 set(SOURCE_PLAIN
   src/plain.cpp
 )
+set(SOURCES_OVERHEAD
+  src/overhead_benchmark.cpp
+)
 file(GLOB_RECURSE HEADERS "include/*.hpp" "include/*.cl")
 
 add_executable(cpu
@@ -172,3 +175,16 @@ target_link_libraries(plain
   ${CAF_LIBRARY_IO}
 )
 
+add_executable(overhead
+  ${SOURCES_OVERHEAD}
+  ${HEADERS}
+  ${OpenCL_INCLUDE_DIRS}
+  ${CAF_INCLUDE_DIR_OPENCL}
+)
+target_link_libraries(overhead
+  ${CMAKE_DL_LIBS}
+  ${CAF_LIBRARY_CORE}
+  ${CAF_LIBRARY_IO}
+  ${CAF_LIBRARY_OPENCL}
+  ${OpenCL_LIBRARIES}
+)
