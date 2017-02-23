@@ -43,8 +43,6 @@ using index_atom = atom_constant<atom("index")>;
 
 constexpr const char* kernel_file_09 = "./include/empty_kernel.cl";
 
-const size_t NUM_LOOPS = 10;
-
 //constexpr const char* kernel_name_01a = "kernel_wah_index";
 
 /*****************************************************************************\
@@ -87,7 +85,8 @@ string as_binary(T num) {
 
 class config : public actor_system_config {
 public:
-  size_t iterations = 1;
+  size_t iterations = 1000;
+  size_t threshold = 1500;
   string filename = "";
   val bound = 0;
   string device_name = "";//"GeForce GTX 780M";
@@ -100,7 +99,8 @@ public:
     .add(device_name, "device,d", "device for computation (GeForce GTX 780M, "
                       "empty string will take first available device)")
     .add(print_results, "print,p", "print resulting bitmap index")
-    .add(iterations, "iterations,i", "Number of times the empty kernel is supposed to run");
+    .add(threshold, "threshold,t", "Threshold for output (1500)")
+    .add(iterations, "iterations,i", "Number of times the empty kernel is supposed to run (1000)");
   }
 };
 
@@ -132,7 +132,7 @@ void caf_main(actor_system& system, const config& cfg) {
   auto prog_overhead = mngr.create_program_from_file(kernel_file_09, "", dev);
 
   // create spawn configuration
-  auto n = 128;
+  size_t n = 1;
   auto index_space_overhead = spawn_config{dim_vec{n}};
   // buffers for execution
   vec config{static_cast<val>(n)};
@@ -145,20 +145,41 @@ void caf_main(actor_system& system, const config& cfg) {
     auto conf_ref = dev.global_argument(config, buffer_type::input);
 
     auto start = high_resolution_clock::now();
+    auto stop = start;
+    vector<size_t> measurements(cfg.iterations);
     for(size_t i = 0; i < cfg.iterations; ++i) {
-         self->send(overhead, conf_ref);
-         self->receive(
-           [&](mem_ref<val>&) {
-             //nop
-           }
-         );
+      start = high_resolution_clock::now();
+      self->send(overhead, conf_ref);
+      self->receive([&](mem_ref<val>&) {
+        stop = high_resolution_clock::now();
+      });
+      measurements[i] = duration_cast<microseconds>(stop - start).count();
     }
 
-    auto stop = high_resolution_clock::now();
+    auto amount = 0;
+    auto threshold = cfg.threshold;
+    auto brk = 0;
+    for (size_t i = 0; i < measurements.size(); ++i) {
+      if (measurements[i] > threshold) {
+        cout << setw(4) << i << " (" << setw(5) << measurements[i]  << ")   "; // << endl;
+        amount += 1;
+        ++brk;
+        if (brk > 13) {
+          cout << endl;
+          brk = 0;
+        }
+      }
+    }
+    if (brk != 0)
+      cout << endl;
+    cout << amount << " of " << cfg.iterations << " values were above " << threshold << endl;
+    //auto stop = high_resolution_clock::now();
     //TODO check if microseconds are good enough or if we should use nanoseconds instead
+    /*
     cout << "Time: '"
          << duration_cast<microseconds>(stop - start).count()
          << "' us" << endl;
+    */
   }
   // clean up
   system.await_all_actors_done();
