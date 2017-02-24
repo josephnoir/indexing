@@ -20,6 +20,8 @@
 #include "caf/opencl/mem_ref.hpp"
 #include "caf/opencl/actor_facade_phase.hpp"
 
+#define SHOW_TIME_CONSUMPTION
+
 using namespace std;
 using namespace std::chrono;
 using namespace caf;
@@ -451,6 +453,12 @@ void caf_main(actor_system& system, const config& cfg) {
     auto fuse_prep = mngr.spawn_phase<vec,vec,vec,vec>(prog_fuse,
                                                        "prepare_index",
                                                        index_space);
+#ifdef SHOW_TIME_CONSUMPTION
+    auto to = high_resolution_clock::now();
+    cout << "[T] Created initial actors after\t\t" << setw(3) << duration_cast<milliseconds>(to - start).count()<< " ms" << endl;
+    auto from = high_resolution_clock::now();
+#endif
+
     // kernel executions
     // temp_ref used as rids buffer
     scoped_actor self{system};
@@ -497,6 +505,11 @@ void caf_main(actor_system& system, const config& cfg) {
     }
     */
     //cout << "DONE: sort_rids_by_value" << endl;
+#ifdef SHOW_TIME_CONSUMPTION
+    to = high_resolution_clock::now();
+    cout << "[T] sort rids by value\t\t\t\t" << setw(3) << duration_cast<milliseconds>(to - from).count()<< " ms" << endl;
+    from = high_resolution_clock::now();
+#endif
     /*
     auto inpt_exp = inpt_ref.data();
     auto rids_exp = temp_ref.data();
@@ -532,6 +545,11 @@ void caf_main(actor_system& system, const config& cfg) {
         */
       }
     );
+#ifdef SHOW_TIME_CONSUMPTION
+    to = high_resolution_clock::now();
+    cout << "[T] produce chunk id literals\t\t\t" << setw(3) << duration_cast<milliseconds>(to - from).count()<< " ms" << endl;
+    from = high_resolution_clock::now();
+#endif
     // use temp as heads array
     self->send(merge_heads, inpt_ref, chid_ref, temp_ref);
     self->receive(
@@ -599,7 +617,12 @@ void caf_main(actor_system& system, const config& cfg) {
       }
     );
     lits_ref.swap(out_ref);
-    // cout << "DONE: merged_lit_by_val_chids." << endl;
+    // cout << "DONE: merge_lit_by_val_chids." << endl;
+#ifdef SHOW_TIME_CONSUMPTION
+    to = high_resolution_clock::now();
+    cout << "[T] merge lit by val chids\t\t\t" << setw(3) << duration_cast<milliseconds>(to - from).count()<< " ms" << endl;
+    from = high_resolution_clock::now();
+#endif
     auto res_conf = conf_ref.data();
     /*
     auto res_inpt = inpt_ref.data();
@@ -630,6 +653,11 @@ void caf_main(actor_system& system, const config& cfg) {
         //cout << "DONE: produce fills." << endl;
       }
     );
+#ifdef SHOW_TIME_CONSUMPTION
+    to = high_resolution_clock::now();
+    cout << "[T] produce fills\t\t\t\t" << setw(3) << duration_cast<milliseconds>(to - from).count()<< " ms" << endl;
+    from = high_resolution_clock::now();
+#endif
     chid_ref.swap(out_ref);
     /*
     res_inpt = inpt_ref.data();
@@ -692,6 +720,11 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     idx_ref.swap(out_ref);
     //cout << "DONE: fuse_fill_literals." << endl;
+#ifdef SHOW_TIME_CONSUMPTION
+    to = high_resolution_clock::now();
+    cout << "[T] fuse fill literals\t\t\t\t" << setw(3) << duration_cast<milliseconds>(to - from).count()<< " ms" << endl;
+    from = high_resolution_clock::now();
+#endif
     auto idx_conf = conf_ref.data();
     //valid_or_exit(res_conf, "Can't read conf after stream compaction.");
     auto conf = *idx_conf;
@@ -839,6 +872,9 @@ void caf_main(actor_system& system, const config& cfg) {
     // offs --> contains offsets
     //valid_or_exit(offs == offsets, "Offsets differ.");
     auto stop = high_resolution_clock::now();
+#ifdef SHOW_TIME_CONSUMPTION
+    cout << "[T] compute colum length\t\t\t" << setw(3) << duration_cast<milliseconds>(stop - from).count()<< " ms" << endl;
+#endif
     cout << "Time: '"
          << duration_cast<milliseconds>(stop - start).count()
          << "' ms" << endl;
