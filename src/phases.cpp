@@ -20,7 +20,7 @@
 #include "caf/opencl/mem_ref.hpp"
 #include "caf/opencl/actor_facade_phase.hpp"
 
-#define SHOW_TIME_CONSUMPTION
+//#define SHOW_TIME_CONSUMPTION
 
 using namespace std;
 using namespace std::chrono;
@@ -307,6 +307,12 @@ size_t compute_colum_length(vector<uint32_t>& input,
 }
 */
 
+
+val round_up(val numToRound, val multiple)  {
+  assert(multiple > 0);
+  return ((numToRound + multiple - 1) / multiple) * multiple;
+}
+
 /*****************************************************************************\
                           INTRODUCE SOME CLI ARGUMENTS
 \*****************************************************************************/
@@ -315,6 +321,7 @@ class config : public actor_system_config {
 public:
   string filename = "";
   val bound = 0;
+  int loops = 1;
   string device_name = "GeForce GTX 780M";
   bool print_results;
   config() {
@@ -342,20 +349,20 @@ void caf_main(actor_system& system, const config& cfg) {
                5,  9,  0,  3,  2, 19,  5, 23, 22, 10,
                6, 22};
   } else {
-    cout << "Reading data from '" << cfg.filename << "' ... " << flush;
+    //cout << "Reading data from '" << cfg.filename << "' ... " << flush;
     ifstream source{cfg.filename, std::ios::in};
     val next;
     while (source >> next) {
       values.push_back(next);
     }
   }
-  cout << "'" << values.size() << "' values." << endl;
+  //cout << "values: " << values.size() << endl;
   auto bound = cfg.bound;
   if (bound == 0 && !values.empty()) {
     auto itr = max_element(values.begin(), values.end());
     bound = *itr;
   }
-  cout << "Maximum value is '" << bound << "'." << endl;
+  //cout << "Maximum value is '" << bound << "'." << endl;
 
   auto& mngr = system.opencl_manager();
 
@@ -368,9 +375,9 @@ void caf_main(actor_system& system, const config& cfg) {
   if (!opt) {
     cerr << "Device " << cfg.device_name << " not found." << endl;
     return;
-  } else {
+  } /*else {
     cout << "Using device named '" << opt->get_name() << "'." << endl;
-  }
+  }*/
   auto dev = *opt;
 
   /*
@@ -394,7 +401,6 @@ void caf_main(actor_system& system, const config& cfg) {
   cout << "Index has " << index_length << " elements with "
        << keycnt << " keys." << endl;
   */
-
   // load kernels
   auto prog_rids   = mngr.create_program_from_file(kernel_file_01, "", dev);
   auto prog_chunks = mngr.create_program_from_file(kernel_file_02, "", dev);
@@ -409,7 +415,9 @@ void caf_main(actor_system& system, const config& cfg) {
   auto n = values.size();
   auto index_space = spawn_config{dim_vec{n}};
   //auto index_space_half = spawn_config{dim_vec{n / 2}};
-  auto index_space_128  = spawn_config{dim_vec{n}, {}, dim_vec{128}};
+  //auto wi = 128 * ((n / 128) + ((n % 128) ? 1 : 0));
+  auto wi = round_up(n, 128);
+  auto index_space_128  = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
 
   // buffers for execution
   vec config{static_cast<val>(n)};
@@ -455,7 +463,6 @@ void caf_main(actor_system& system, const config& cfg) {
                                                        index_space);
 #ifdef SHOW_TIME_CONSUMPTION
     auto to = high_resolution_clock::now();
-    cout << "[T] Created initial actors after\t\t" << setw(3) << duration_cast<milliseconds>(to - start).count()<< " ms" << endl;
     auto from = high_resolution_clock::now();
 #endif
 
@@ -469,7 +476,6 @@ void caf_main(actor_system& system, const config& cfg) {
         // nop
       }
     );
-    config.resize(2);
     // chids and lit only used as temporary buffers
     self->send(rids_3, inpt_ref, temp_ref, chid_ref, lits_ref);
     self->receive(
@@ -485,6 +491,7 @@ void caf_main(actor_system& system, const config& cfg) {
     for (val length = 1; length < values.size(); length <<= 1) {
       int inc = length;
       bool done = false;
+      config.resize(2);
       config[0] = inc;
       config[1] = length << 1;
       conf_ref = dev.global_argument(config, buffer_type::input);
@@ -507,7 +514,7 @@ void caf_main(actor_system& system, const config& cfg) {
     //cout << "DONE: sort_rids_by_value" << endl;
 #ifdef SHOW_TIME_CONSUMPTION
     to = high_resolution_clock::now();
-    cout << "[T] sort rids by value\t\t\t\t" << setw(3) << duration_cast<milliseconds>(to - from).count()<< " ms" << endl;
+    cout << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
     /*
@@ -547,7 +554,7 @@ void caf_main(actor_system& system, const config& cfg) {
     );
 #ifdef SHOW_TIME_CONSUMPTION
     to = high_resolution_clock::now();
-    cout << "[T] produce chunk id literals\t\t\t" << setw(3) << duration_cast<milliseconds>(to - from).count()<< " ms" << endl;
+    cout << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
     // use temp as heads array
@@ -576,10 +583,11 @@ void caf_main(actor_system& system, const config& cfg) {
       }
     );
     // stream compact inpt, chid, lits by heads value
+    config.resize(2);
     config[0] = static_cast<val>(n);
     config[1] = 0;
     conf_ref = dev.global_argument(config, buffer_type::input_output);
-    auto blocks_size = n / 128; // dev.get_max_compute_units();
+    auto blocks_size = wi / 128; // dev.get_max_compute_units();
     auto blocks_ref = dev.scratch_argument<val>(blocks_size,
                                                 buffer_type::output);
     auto b128_ref = dev.local_argument<val>(128);
@@ -620,7 +628,7 @@ void caf_main(actor_system& system, const config& cfg) {
     // cout << "DONE: merge_lit_by_val_chids." << endl;
 #ifdef SHOW_TIME_CONSUMPTION
     to = high_resolution_clock::now();
-    cout << "[T] merge lit by val chids\t\t\t" << setw(3) << duration_cast<milliseconds>(to - from).count()<< " ms" << endl;
+    cout << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
     auto res_conf = conf_ref.data();
@@ -655,7 +663,7 @@ void caf_main(actor_system& system, const config& cfg) {
     );
 #ifdef SHOW_TIME_CONSUMPTION
     to = high_resolution_clock::now();
-    cout << "[T] produce fills\t\t\t\t" << setw(3) << duration_cast<milliseconds>(to - from).count()<< " ms" << endl;
+    cout << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
     chid_ref.swap(out_ref);
@@ -688,8 +696,8 @@ void caf_main(actor_system& system, const config& cfg) {
     //valid_or_exit(idx_res, "Index preparation glitched.");
     // stream compaction using input ad valid
     // currently newly created actor to change NDRange
-    // auto wi = 128 * (((2 * k) / 128) + (((2 * k) % 128) ? 1 : 0));
-    auto wi = ((2 * k) + 128 - 1) & ~(128 - 1); // only for powers of 2
+    wi = round_up(2 * k, 128); //128 * (((2 * k) / 128) + (((2 * k) % 128) ? 1 : 0));
+    //auto wi = ((2 * k) + 128 - 1) & ~(128 - 1); // only for powers of 2
     auto index_space_2k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
     sc_count = mngr.spawn_phase<vec,vec,vec,vec>(prog_sc, "countElts",
                                                  index_space_2k_128);
@@ -722,7 +730,7 @@ void caf_main(actor_system& system, const config& cfg) {
     //cout << "DONE: fuse_fill_literals." << endl;
 #ifdef SHOW_TIME_CONSUMPTION
     to = high_resolution_clock::now();
-    cout << "[T] fuse fill literals\t\t\t\t" << setw(3) << duration_cast<milliseconds>(to - from).count()<< " ms" << endl;
+    cout << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
     auto idx_conf = conf_ref.data();
@@ -730,7 +738,7 @@ void caf_main(actor_system& system, const config& cfg) {
     auto conf = *idx_conf;
     auto idx_len = conf[1];
     //valid_or_exit(index_length == idx_len, "Lengths don't match");
-    cout << "Created index of length " << idx_len << "." << endl;
+ // cout << "Created index of length " << idx_len << "." << endl;
     auto idx_idx = idx_ref.data(idx_len);
     //valid_or_exit(idx_idx, "Can't read index after stream compaction.");
     auto idx = *idx_idx;
@@ -744,7 +752,9 @@ void caf_main(actor_system& system, const config& cfg) {
     auto col_scan = mngr.spawn_phase<vec,vec>(prog_colum,
                                               "lazy_segmented_scan",
                                               index_space_k);
-    wi = ((k) + 128 - 1) & ~(128 - 1); // only for powers of 2
+    //wi = ((k) + 128 - 1) & ~(128 - 1); // only for powers of 2
+    //wi = 128 * (((2 * k) / 128) + (((2 * k) % 128) ? 1 : 0));
+    wi = round_up(k, 128);
     auto index_space_k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
     sc_count = mngr.spawn_phase<vec,vec,vec,vec>(prog_sc, "countElts",
                                                  index_space_k_128);
@@ -790,7 +800,7 @@ void caf_main(actor_system& system, const config& cfg) {
     conf = *idx_conf;
     auto keycount = conf[1];
     //valid_or_exit(keycnt == keycount, "Different amount of keys.");
-    cout << "Index has " << keycount << " keys." << endl;
+ // cout << "Index has " << keycount << " keys." << endl;
     // missing: exclusive scan over temp_ref
     config.resize(2);
     config[0] = keycount;
@@ -873,11 +883,11 @@ void caf_main(actor_system& system, const config& cfg) {
     //valid_or_exit(offs == offsets, "Offsets differ.");
     auto stop = high_resolution_clock::now();
 #ifdef SHOW_TIME_CONSUMPTION
-    cout << "[T] compute colum length\t\t\t" << setw(3) << duration_cast<milliseconds>(stop - from).count()<< " ms" << endl;
+    cout << duration_cast<microseconds>(stop - from).count()<< " us" << endl;
 #endif
-    cout << "Time: '"
-         << duration_cast<milliseconds>(stop - start).count()
-         << "' ms" << endl;
+    cout //<< "Total: "
+         << duration_cast<microseconds>(stop - start).count()
+         << " us" << endl;
   }
   // clean up
   system.await_all_actors_done();
