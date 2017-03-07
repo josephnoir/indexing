@@ -20,17 +20,34 @@
 #include "caf/opencl/mem_ref.hpp"
 #include "caf/opencl/actor_facade_phase.hpp"
 
-//#define SHOW_TIME_CONSUMPTION
+#define SHOW_TIME_CONSUMPTION
 
 using namespace std;
 using namespace std::chrono;
 using namespace caf;
 using namespace caf::opencl;
 
+struct radix_config {
+  uint32_t radices;  // number of radices
+  uint32_t blocks;   // number of blocks
+  uint32_t gpb;      // groups per block
+  uint32_t r_val;    // R
+  uint32_t tpg;      // threads per group
+  uint32_t epg;      // elements per group
+  uint32_t rpb;      // radices per block
+  uint32_t mask;     // bit mask
+  uint32_t l_val;    // L
+  uint32_t tpb;      // threads per block
+  uint32_t size;     // total elements
+};
+
 // required to allow sending mem_ref<int> in messages
 namespace caf {
   template <>
   struct allowed_unsafe_message_type<mem_ref<uint32_t>> : std::true_type {};
+  template <>
+  struct allowed_unsafe_message_type<mem_ref<radix_config>> 
+    : std::true_type {};
 }
 
 namespace {
@@ -51,6 +68,7 @@ constexpr const char* kernel_file_05 = "./include/fuse_fill_literals.cl";
 constexpr const char* kernel_file_06 = "./include/compute_colum_length.cl";
 constexpr const char* kernel_file_07 = "./include/stream_compaction.cl";
 constexpr const char* kernel_file_08 = "./include/scan.cl";
+constexpr const char* kernel_file_09 = "./include/radix.cl";
 
 //constexpr const char* kernel_name_01a = "kernel_wah_index";
 
@@ -314,6 +332,12 @@ val round_up(val numToRound, val multiple)  {
 }
 
 /*****************************************************************************\
+                              USED FOR RADIX SORT
+\*****************************************************************************/
+
+
+
+/*****************************************************************************\
                           INTRODUCE SOME CLI ARGUMENTS
 \*****************************************************************************/
 
@@ -322,7 +346,7 @@ public:
   string filename = "";
   val bound = 0;
   int loops = 1;
-  string device_name = "GeForce GTX 780M";
+  string device_name = "GeForce GT 650M";
   bool print_results;
   config() {
     load<opencl::manager>();
@@ -410,6 +434,7 @@ void caf_main(actor_system& system, const config& cfg) {
   auto prog_colum  = mngr.create_program_from_file(kernel_file_06, "", dev);
   auto prog_sc     = mngr.create_program_from_file(kernel_file_07, "", dev);
   auto prog_es     = mngr.create_program_from_file(kernel_file_08, "", dev);
+  auto prog_radix  = mngr.create_program_from_file(kernel_file_09, "", dev);
 
   // create spawn configuration
   auto n = values.size();
@@ -426,6 +451,39 @@ void caf_main(actor_system& system, const config& cfg) {
   auto chid_ref = dev.scratch_argument<val>(n, buffer_type::output);
   auto lits_ref = dev.scratch_argument<val>(n, buffer_type::output);
   auto temp_ref = dev.scratch_argument<val>(n, buffer_type::output);
+
+  // sort configuration
+  uint32_t l_val = 4; // bits used as a bucket in each radix iteration
+  uint32_t radices = 1 << l_val;
+  uint32_t blocks = 16; // CUDA blocks ... ? (why 16?)
+  uint32_t threads_per_block = 512; // (why this size?)
+  uint32_t r_val = 8; // because ...?
+  uint32_t groups_per_block = threads_per_block / r_val; // ...
+  uint32_t mask = 0xF; // ...
+  uint32_t threads_per_group = threads_per_block / groups_per_block;
+  uint32_t radices_per_block = radices / blocks;
+  uint32_t elements = static_cast<uint32_t>(n);
+  uint32_t elements_per_group = 1 + (elements / (blocks * groups_per_block));
+  //vector<uint32_t> rc{
+  radix_config rc = {
+    radices,
+    blocks,
+    groups_per_block,
+    r_val,
+    threads_per_group,
+    elements_per_group,
+    radices_per_block,
+    mask,
+    l_val,
+    threads_per_block,
+    elements
+  };
+  uint32_t counters = radices * groups_per_block * blocks;
+  uint32_t prefixes = radices;
+  size_t radix_global = threads_per_block * blocks;
+  size_t radix_local = threads_per_block;
+  auto radix_range = spawn_config{dim_vec{radix_global}, {},
+                                  dim_vec{radix_local}};
   {
     auto start = high_resolution_clock::now();
     // create phases
@@ -435,10 +493,10 @@ void caf_main(actor_system& system, const config& cfg) {
     auto rids_2 = mngr.spawn_phase<vec, vec, vec>(prog_rids,
                                                   "ParallelBitonic_B2",
                                                   index_space_half);
-    */
     auto rids_3 = mngr.spawn_phase<vec, vec, vec, vec>(prog_rids,
                                                        "ParallelSelection",
                                                        index_space);
+    */
     auto chunks = mngr.spawn_phase<vec, vec, vec>(prog_chunks,
                                                   "produce_chunks",
                                                   index_space);
@@ -461,6 +519,15 @@ void caf_main(actor_system& system, const config& cfg) {
     auto fuse_prep = mngr.spawn_phase<vec,vec,vec,vec>(prog_fuse,
                                                        "prepare_index",
                                                        index_space);
+    auto radix_count = mngr.spawn_phase<vec,vec,radix_config,
+                                        val>(prog_radix, "count",
+                                                  radix_range);
+    auto radix_sum = mngr.spawn_phase<vec,vec,vec,vec,radix_config,
+                                      val>(prog_radix, "sum", radix_range);
+    auto radix_move
+      = mngr.spawn_phase<vec,vec,vec,vec,vec,vec,vec,vec,
+                         radix_config, val>(prog_radix, "values_by_keys",
+                                            radix_range);
 #ifdef SHOW_TIME_CONSUMPTION
     auto to = high_resolution_clock::now();
     auto from = high_resolution_clock::now();
@@ -476,6 +543,7 @@ void caf_main(actor_system& system, const config& cfg) {
         // nop
       }
     );
+    /*
     // chids and lit only used as temporary buffers
     self->send(rids_3, inpt_ref, temp_ref, chid_ref, lits_ref);
     self->receive(
@@ -487,6 +555,7 @@ void caf_main(actor_system& system, const config& cfg) {
     temp_ref = lits_ref;
     chid_ref = dev.scratch_argument<val>(n, buffer_type::output);
     lits_ref = dev.scratch_argument<val>(n, buffer_type::output);
+    */
     /*
     for (val length = 1; length < values.size(); length <<= 1) {
       int inc = length;
@@ -511,10 +580,104 @@ void caf_main(actor_system& system, const config& cfg) {
       );
     }
     */
+    // radix sort for values by key using inpt as keys and temp as values
+    cout << "Attempting radix sort." << endl;
+    auto r_keys_in = inpt_ref;
+    auto r_keys_out = dev.scratch_argument<val>(n, buffer_type::output);
+    auto r_values_in = temp_ref;
+    auto r_values_out = dev.scratch_argument<val>(n, buffer_type::output);
+    vec nulls(counters, 0);
+    auto r_counters = dev.global_argument(nulls);
+    auto r_prefixes = dev.global_argument(nulls, buffer_type::input_output,
+                                          prefixes);
+    auto r_local_a = dev.local_argument<val>(blocks * groups_per_block);
+    auto r_local_b
+      = dev.local_argument<val>(groups_per_block * blocks * radices_per_block);
+    auto r_local_c = dev.local_argument<val>(radices);
+    auto r_conf = dev.private_argument(rc);
+    //auto r_conf = dev.global_argument(rc);
+    uint32_t iterations = sizeof(val) * 8 / l_val; // Might be the reason
+    cout << "Created input references." << endl;
+    for (uint32_t i = 0; i < iterations; ++i) {
+      cout << "Next iteration, offset = " << (l_val * i) << endl;
+      auto r_offset = dev.private_argument(static_cast<uint32_t>(l_val * i));
+      if (i % 2 == 0) {
+        self->send(radix_count, r_keys_in, r_counters, r_conf, r_offset);
+        self->receive(
+          [&](mem_ref<val>&, mem_ref<val>&, mem_ref<radix_config>&,
+              mem_ref<val>&) {
+            cout << "even: count" << endl;
+            // nop
+        });
+        self->send(radix_sum, r_keys_in, r_counters, r_prefixes,
+                   r_local_a, r_conf, r_offset);
+        self->receive(
+          [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
+              mem_ref<radix_config>&, mem_ref<val>&) {
+            cout << "even: sum" << endl;
+            // nop
+        });
+        self->send(radix_move, r_keys_in, r_keys_out, r_values_in,
+                   r_values_out, r_counters, r_prefixes, r_local_b,
+                   r_local_c, r_conf, r_offset);
+        self->receive(
+          [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
+              mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
+              mem_ref<radix_config>&, mem_ref<val>&) {
+            cout << "even: move" << endl;
+            // nop
+        });
+      } else {
+        self->send(radix_count, r_keys_out, r_counters, r_conf,
+                   r_offset);
+        self->receive(
+          [&](mem_ref<val>&, mem_ref<val>&, mem_ref<radix_config>&,
+              mem_ref<val>&) {
+            cout << "odd: count" << endl;
+            // nop
+        });
+        self->send(radix_sum, r_keys_out, r_counters, r_prefixes,
+                   r_local_a, r_conf, r_offset);
+        self->receive(
+          [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
+              mem_ref<radix_config>&, mem_ref<val>&) {
+            cout << "odd: sum" << endl;
+            // nop
+        });
+        self->send(radix_move, r_keys_out, r_keys_in, r_values_out,
+                   r_values_in, r_counters, r_prefixes, r_local_b,
+                   r_local_c, r_conf, r_offset);
+        self->receive(
+          [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
+              mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
+              mem_ref<radix_config>&, mem_ref<val>&) {
+            cout << "odd: move" << endl;
+            // nop
+        });
+      }
+    }
+    //if (iterations % 2 != 0) {
+    //  // copy input to output ? 
+    //}
+    inpt_ref.swap(r_keys_out);
+    temp_ref.swap(r_values_out);
+    chid_ref = dev.scratch_argument<val>(n, buffer_type::output);
+    lits_ref = dev.scratch_argument<val>(n, buffer_type::output);
+    // clean up fter sort
+    r_keys_in.reset();
+    r_keys_out.reset();
+    r_values_in.reset();
+    r_values_out.reset();
+    r_counters.reset();
+    r_prefixes.reset();
+    r_local_a.reset();
+    r_local_b.reset();
+    r_local_c.reset();
+    r_conf.reset();
     //cout << "DONE: sort_rids_by_value" << endl;
 #ifdef SHOW_TIME_CONSUMPTION
     to = high_resolution_clock::now();
-    cout << duration_cast<microseconds>(to - from).count()<< " us" << endl;
+    cout << duration_cast<microseconds>(to - from).count() << " us" << endl;
     from = high_resolution_clock::now();
 #endif
     /*

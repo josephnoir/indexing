@@ -116,9 +116,9 @@ kernel void count(global uint* cell_in,
 kernel void sum(global uint* cell_in,
                 global volatile uint* counters,
                 global uint* prefixes,
+                local uint* counts,
                 configuration conf,
-                uint offset,
-                local uint* counts) {
+                uint offset) {
   uint lid = get_local_id(0);
   uint grp = get_group_id(0);
   uint groups = conf.blocks * conf.gpb;
@@ -223,16 +223,16 @@ kernel void reorder_keys(global uint* cell_in,
   }
 }
 
-kernel void reorder_values_by_keys(global uint* cell_in,
-                                   global uint* cell_out,
-                                   global ulong* valueIn, 
-                                   global ulong* valueOut,
-                                   global uint* counters,
-                                   global uint* prefixes,
-                                   local uint* l_counters,
-                                   local uint* l_prefixes,
-                                   configuration conf, 
-                                   uint offset) {
+kernel void values_by_keys(global uint* cell_in,
+                           global uint* cell_out,
+                           global uint* value_in, 
+                           global uint* value_out,
+                           global uint* counters,
+                           global uint* prefixes,
+                           local uint* l_counters,
+                           local uint* l_prefixes,
+                           configuration conf, 
+                           uint offset) {
   uint lid = get_local_id(0);
   uint grp = get_group_id(0);
   uint thread_grp = lid / conf.r_val;
@@ -288,11 +288,14 @@ kernel void reorder_values_by_keys(global uint* cell_in,
     for (uint tmpIdx = 0; tmpIdx < conf.r_val; tmpIdx++) {
       if (lid % conf.r_val == tmpIdx) {
         uint tmp = tmpRdx * groups + active_counter + thread_grp;
+        printf("Writing to tmp = %d of counters = %d\n", tmp, counters[tmp]);
+  /*
         cell_out[counters[tmp]] = cell_in[idx];
-        valueOut[counters[tmp]] = valueIn[idx];
+        value_out[counters[tmp]] = value_in[idx];
         // TODO: is the increment ok, or should we use atomics?
         ++counters[tmp];
         //atomic_inc(&counters[tmp]);
+  */
       }
       barrier(CLK_LOCAL_MEM_FENCE);
     }
