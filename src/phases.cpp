@@ -484,6 +484,7 @@ void caf_main(actor_system& system, const config& cfg) {
   size_t radix_local = threads_per_block;
   auto radix_range = spawn_config{dim_vec{radix_global}, {},
                                   dim_vec{radix_local}};
+  auto zero_range = spawn_config{dim_vec{counters}};
   {
     auto start = high_resolution_clock::now();
     // create phases
@@ -519,9 +520,9 @@ void caf_main(actor_system& system, const config& cfg) {
     auto fuse_prep = mngr.spawn_phase<vec,vec,vec,vec>(prog_fuse,
                                                        "prepare_index",
                                                        index_space);
+    auto radix_zero = mngr.spawn_phase<vec>(prog_radix, "zeroes", zero_range);
     auto radix_count = mngr.spawn_phase<vec,vec,radix_config,
-                                        val>(prog_radix, "count",
-                                                  radix_range);
+                                        val>(prog_radix, "count", radix_range);
     auto radix_sum = mngr.spawn_phase<vec,vec,vec,vec,radix_config,
                                       val>(prog_radix, "sum", radix_range);
     auto radix_move
@@ -581,15 +582,13 @@ void caf_main(actor_system& system, const config& cfg) {
     }
     */
     // radix sort for values by key using inpt as keys and temp as values
-    cout << "Attempting radix sort." << endl;
     auto r_keys_in = inpt_ref;
     auto r_keys_out = dev.scratch_argument<val>(n, buffer_type::output);
     auto r_values_in = temp_ref;
     auto r_values_out = dev.scratch_argument<val>(n, buffer_type::output);
-    vec nulls(counters, 0);
-    auto r_counters = dev.global_argument(nulls);
-    auto r_prefixes = dev.global_argument(nulls, buffer_type::input_output,
-                                          prefixes);
+    auto r_counters = dev.scratch_argument<val>(counters);
+    auto r_prefixes = dev.scratch_argument<val>(prefixes);
+      //dev.global_argument(nulls, buffer_type::input_output, prefixes);
     auto r_local_a = dev.local_argument<val>(blocks * groups_per_block);
     auto r_local_b
       = dev.local_argument<val>(groups_per_block * blocks * radices_per_block);
@@ -597,16 +596,17 @@ void caf_main(actor_system& system, const config& cfg) {
     auto r_conf = dev.private_argument(rc);
     //auto r_conf = dev.global_argument(rc);
     uint32_t iterations = sizeof(val) * 8 / l_val; // Might be the reason
-    cout << "Created input references." << endl;
     for (uint32_t i = 0; i < iterations; ++i) {
-      cout << "Next iteration, offset = " << (l_val * i) << endl;
       auto r_offset = dev.private_argument(static_cast<uint32_t>(l_val * i));
+      self->send(radix_zero, r_counters);
+      self->receive( [&](mem_ref<val>&) {
+        // nop
+      });
       if (i % 2 == 0) {
         self->send(radix_count, r_keys_in, r_counters, r_conf, r_offset);
         self->receive(
           [&](mem_ref<val>&, mem_ref<val>&, mem_ref<radix_config>&,
               mem_ref<val>&) {
-            cout << "even: count" << endl;
             // nop
         });
         self->send(radix_sum, r_keys_in, r_counters, r_prefixes,
@@ -614,7 +614,6 @@ void caf_main(actor_system& system, const config& cfg) {
         self->receive(
           [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
               mem_ref<radix_config>&, mem_ref<val>&) {
-            cout << "even: sum" << endl;
             // nop
         });
         self->send(radix_move, r_keys_in, r_keys_out, r_values_in,
@@ -624,7 +623,6 @@ void caf_main(actor_system& system, const config& cfg) {
           [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
               mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
               mem_ref<radix_config>&, mem_ref<val>&) {
-            cout << "even: move" << endl;
             // nop
         });
       } else {
@@ -633,7 +631,6 @@ void caf_main(actor_system& system, const config& cfg) {
         self->receive(
           [&](mem_ref<val>&, mem_ref<val>&, mem_ref<radix_config>&,
               mem_ref<val>&) {
-            cout << "odd: count" << endl;
             // nop
         });
         self->send(radix_sum, r_keys_out, r_counters, r_prefixes,
@@ -641,7 +638,6 @@ void caf_main(actor_system& system, const config& cfg) {
         self->receive(
           [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
               mem_ref<radix_config>&, mem_ref<val>&) {
-            cout << "odd: sum" << endl;
             // nop
         });
         self->send(radix_move, r_keys_out, r_keys_in, r_values_out,
@@ -651,7 +647,6 @@ void caf_main(actor_system& system, const config& cfg) {
           [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
               mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
               mem_ref<radix_config>&, mem_ref<val>&) {
-            cout << "odd: move" << endl;
             // nop
         });
       }

@@ -20,6 +20,10 @@ typedef struct radix_config {
   uint size;     // total elements
 } configuration;
 
+kernel void zeroes(global uint* counters) {
+  counters[get_global_id(0)] = 0;
+} 
+
 // If this is a prefix sum, can be optimize this, maybe, write a static
 // version that assumes local size <= 1024?
 inline void prefix_local(local uint* data, int len, int threads) {
@@ -288,14 +292,11 @@ kernel void values_by_keys(global uint* cell_in,
     for (uint tmpIdx = 0; tmpIdx < conf.r_val; tmpIdx++) {
       if (lid % conf.r_val == tmpIdx) {
         uint tmp = tmpRdx * groups + active_counter + thread_grp;
-        printf("Writing to tmp = %d of counters = %d\n", tmp, counters[tmp]);
-  /*
         cell_out[counters[tmp]] = cell_in[idx];
         value_out[counters[tmp]] = value_in[idx];
         // TODO: is the increment ok, or should we use atomics?
         ++counters[tmp];
         //atomic_inc(&counters[tmp]);
-  */
       }
       barrier(CLK_LOCAL_MEM_FENCE);
     }
