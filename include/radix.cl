@@ -22,7 +22,7 @@ typedef struct radix_config {
 
 kernel void zeroes(global uint* counters) {
   counters[get_global_id(0)] = 0;
-} 
+}
 
 // If this is a prefix sum, can be optimize this, maybe, write a static
 // version that assumes local size <= 1024?
@@ -159,14 +159,14 @@ kernel void sum(global uint* cell_in,
   }
 }
 
-kernel void reorder_keys(global uint* cell_in,
-                         global uint* cell_out,
-                         global uint* counters,
-                         global uint* prefixes,
-                         local uint* l_counters,
-                         local uint* l_prefixes,
-                         configuration conf,
-                         uint offset) {
+kernel void values(global uint* cell_in,
+                   global uint* cell_out,
+                   global uint* counters,
+                   global uint* prefixes,
+                   local uint* l_counters,
+                   local uint* l_prefixes,
+                   configuration conf,
+                   uint offset) {
   uint lid = get_local_id(0);
   uint grp = get_group_id(0);
   uint thread_grp = lid / conf.r_val;

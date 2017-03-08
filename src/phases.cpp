@@ -346,7 +346,7 @@ public:
   string filename = "";
   val bound = 0;
   int loops = 1;
-  string device_name = "GeForce GT 650M";
+  string device_name = "GeForce GTX 780M";
   bool print_results;
   config() {
     load<opencl::manager>();
@@ -456,7 +456,7 @@ void caf_main(actor_system& system, const config& cfg) {
   uint32_t l_val = 4; // bits used as a bucket in each radix iteration
   uint32_t radices = 1 << l_val;
   uint32_t blocks = dev.get_max_compute_units(); //16; // CUDA blocks ... ? (can be adjusted at will)
-  uint32_t threads_per_block = 512; // (same)
+  uint32_t threads_per_block = 1024; // (same)
   uint32_t r_val = 8; // because ...?
   uint32_t groups_per_block = threads_per_block / r_val; // ...
   uint32_t mask = 0xF; // ...
@@ -519,8 +519,8 @@ void caf_main(actor_system& system, const config& cfg) {
     auto radix_sum = mngr.spawn_phase<vec,vec,vec,vec,radix_config,
                                       val>(prog_radix, "sum", radix_range);
     auto radix_move
-      = mngr.spawn_phase<vec,vec,vec,vec,vec,vec,vec,vec,
-                         radix_config, val>(prog_radix, "values_by_keys",
+      = mngr.spawn_phase<vec,vec,vec,vec,vec,vec,//vec,vec,
+                         radix_config, val>(prog_radix, "values",
                                             radix_range);
     */
     auto radix_zero = mngr.spawn_phase<vec>(prog_radix, "zeroes", zero_range);
@@ -532,7 +532,7 @@ void caf_main(actor_system& system, const config& cfg) {
     auto radix_move
       = mngr.spawn_phase<vec,vec,vec,vec,vec,vec, // vec,vec,
                          radix_config, val>(prog_radix, "ReorderingKeysOnly",
-                                            radix_range);
+                                          radix_range);
 #ifdef SHOW_TIME_CONSUMPTION
     auto to = high_resolution_clock::now();
     auto from = high_resolution_clock::now();
