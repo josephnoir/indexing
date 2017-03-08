@@ -68,7 +68,7 @@ constexpr const char* kernel_file_05 = "./include/fuse_fill_literals.cl";
 constexpr const char* kernel_file_06 = "./include/compute_colum_length.cl";
 constexpr const char* kernel_file_07 = "./include/stream_compaction.cl";
 constexpr const char* kernel_file_08 = "./include/scan.cl";
-constexpr const char* kernel_file_09 = "./include/radix.cl";
+constexpr const char* kernel_file_09 = "./include/radix_raw.cl";
 
 //constexpr const char* kernel_name_01a = "kernel_wah_index";
 
@@ -142,7 +142,6 @@ string decoded_bitmap(const vec& bitmap) {
 /*****************************************************************************\
         TESTS FUNCTIONS ON CPU FOR COMPARISON (TODO: DELTE THIS LATER)
 \*****************************************************************************/
-/*
 // in : input
 // out: input, rids (both sorted by input)
 void sort_rids_by_value(vector<uint32_t>& input, vector<uint32_t>& rids) {
@@ -164,6 +163,7 @@ void sort_rids_by_value(vector<uint32_t>& input, vector<uint32_t>& rids) {
   }
 }
 
+/*
 // in : rids, n (length)
 // out: chids, lits
 void produce_chunk_id_literals(vector<uint32_t>& rids,
@@ -404,13 +404,13 @@ void caf_main(actor_system& system, const config& cfg) {
   }*/
   auto dev = *opt;
 
-  /*
   // Create test data
   auto input = values;
   vec rids(input.size());
   vec chids(input.size());
   vec lits(input.size());
   sort_rids_by_value(input, rids);
+  /*
   produce_chunk_id_literals(rids, chids, lits);
   auto k_test = merged_lit_by_val_chids(input, chids, lits);
   vec chids_produce{chids};
@@ -455,8 +455,8 @@ void caf_main(actor_system& system, const config& cfg) {
   // sort configuration
   uint32_t l_val = 4; // bits used as a bucket in each radix iteration
   uint32_t radices = 1 << l_val;
-  uint32_t blocks = 16; // CUDA blocks ... ? (why 16?)
-  uint32_t threads_per_block = 512; // (why this size?)
+  uint32_t blocks = dev.get_max_compute_units(); //16; // CUDA blocks ... ? (can be adjusted at will)
+  uint32_t threads_per_block = 512; // (same)
   uint32_t r_val = 8; // because ...?
   uint32_t groups_per_block = threads_per_block / r_val; // ...
   uint32_t mask = 0xF; // ...
@@ -490,14 +490,6 @@ void caf_main(actor_system& system, const config& cfg) {
     // create phases
     auto rids_1 = mngr.spawn_phase<vec, vec, vec>(prog_rids, "create_rids",
                                                   index_space);
-    /*
-    auto rids_2 = mngr.spawn_phase<vec, vec, vec>(prog_rids,
-                                                  "ParallelBitonic_B2",
-                                                  index_space_half);
-    auto rids_3 = mngr.spawn_phase<vec, vec, vec, vec>(prog_rids,
-                                                       "ParallelSelection",
-                                                       index_space);
-    */
     auto chunks = mngr.spawn_phase<vec, vec, vec>(prog_chunks,
                                                   "produce_chunks",
                                                   index_space);
@@ -520,6 +512,7 @@ void caf_main(actor_system& system, const config& cfg) {
     auto fuse_prep = mngr.spawn_phase<vec,vec,vec,vec>(prog_fuse,
                                                        "prepare_index",
                                                        index_space);
+    /*
     auto radix_zero = mngr.spawn_phase<vec>(prog_radix, "zeroes", zero_range);
     auto radix_count = mngr.spawn_phase<vec,vec,radix_config,
                                         val>(prog_radix, "count", radix_range);
@@ -528,6 +521,17 @@ void caf_main(actor_system& system, const config& cfg) {
     auto radix_move
       = mngr.spawn_phase<vec,vec,vec,vec,vec,vec,vec,vec,
                          radix_config, val>(prog_radix, "values_by_keys",
+                                            radix_range);
+    */
+    auto radix_zero = mngr.spawn_phase<vec>(prog_radix, "zeroes", zero_range);
+    auto radix_count = mngr.spawn_phase<vec,vec,radix_config,
+                                        val>(prog_radix, "SetupAndCount",
+                                             radix_range);
+    auto radix_sum = mngr.spawn_phase<vec,vec,vec,vec,radix_config,
+                                      val>(prog_radix, "SumIt", radix_range);
+    auto radix_move
+      = mngr.spawn_phase<vec,vec,vec,vec,vec,vec, // vec,vec,
+                         radix_config, val>(prog_radix, "ReorderingKeysOnly",
                                             radix_range);
 #ifdef SHOW_TIME_CONSUMPTION
     auto to = high_resolution_clock::now();
@@ -581,101 +585,63 @@ void caf_main(actor_system& system, const config& cfg) {
       );
     }
     */
-    // radix sort for values by key using inpt as keys and temp as values
-    auto r_keys_in = inpt_ref;
-    auto r_keys_out = dev.scratch_argument<val>(n, buffer_type::output);
-    auto r_values_in = temp_ref;
-    auto r_values_out = dev.scratch_argument<val>(n, buffer_type::output);
-    auto r_counters = dev.scratch_argument<val>(counters);
-    auto r_prefixes = dev.scratch_argument<val>(prefixes);
-      //dev.global_argument(nulls, buffer_type::input_output, prefixes);
-    auto r_local_a = dev.local_argument<val>(blocks * groups_per_block);
-    auto r_local_b
-      = dev.local_argument<val>(groups_per_block * blocks * radices_per_block);
-    auto r_local_c = dev.local_argument<val>(radices);
-    auto r_conf = dev.private_argument(rc);
-    //auto r_conf = dev.global_argument(rc);
-    uint32_t iterations = sizeof(val) * 8 / l_val; // Might be the reason
-    for (uint32_t i = 0; i < iterations; ++i) {
-      auto r_offset = dev.private_argument(static_cast<uint32_t>(l_val * i));
-      self->send(radix_zero, r_counters);
-      self->receive( [&](mem_ref<val>&) {
-        // nop
-      });
-      if (i % 2 == 0) {
+    {
+      // radix sort for values by key using inpt as keys and temp as values
+      auto r_keys_in = inpt_ref;
+      auto r_keys_out = chid_ref; 
+      // = dev.scratch_argument<val>(n, buffer_type::output);
+      auto r_values_in = temp_ref;
+      auto r_values_out = lits_ref;
+      // = dev.scratch_argument<val>(n, buffer_type::output);
+      auto r_counters = dev.scratch_argument<val>(counters,
+                                                  buffer_type::output);
+      auto r_prefixes = dev.scratch_argument<val>(prefixes,
+                                                  buffer_type::output);
+        //dev.global_argument(nulls, buffer_type::input_output, prefixes);
+      auto r_local_a = dev.local_argument<val>(blocks * groups_per_block);
+      auto r_local_b = dev.local_argument<val>(groups_per_block * blocks * 
+                                               radices_per_block);
+      auto r_local_c = dev.local_argument<val>(radices);
+      auto r_conf = dev.private_argument(rc);
+      //auto r_conf = dev.global_argument(rc);
+      uint32_t iterations = sizeof(val) * 8 / l_val;
+      for (uint32_t i = 0; i < iterations; ++i) {
+        auto r_offset = dev.private_argument(static_cast<val>(l_val * i));
+        self->send(radix_zero, r_counters);
+        self->receive([&](mem_ref<val>&) { });
+        if (i > 0) {
+          std::swap(r_keys_in, r_keys_out);
+          std::swap(r_values_in, r_values_out);
+        }
         self->send(radix_count, r_keys_in, r_counters, r_conf, r_offset);
-        self->receive(
-          [&](mem_ref<val>&, mem_ref<val>&, mem_ref<radix_config>&,
-              mem_ref<val>&) {
-            // nop
-        });
-        self->send(radix_sum, r_keys_in, r_counters, r_prefixes,
-                   r_local_a, r_conf, r_offset);
-        self->receive(
-          [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
-              mem_ref<radix_config>&, mem_ref<val>&) {
-            // nop
-        });
-        self->send(radix_move, r_keys_in, r_keys_out, r_values_in,
-                   r_values_out, r_counters, r_prefixes, r_local_b,
-                   r_local_c, r_conf, r_offset);
-        self->receive(
-          [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
-              mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
-              mem_ref<radix_config>&, mem_ref<val>&) {
-            // nop
-        });
-      } else {
-        self->send(radix_count, r_keys_out, r_counters, r_conf,
-                   r_offset);
-        self->receive(
-          [&](mem_ref<val>&, mem_ref<val>&, mem_ref<radix_config>&,
-              mem_ref<val>&) {
-            // nop
-        });
-        self->send(radix_sum, r_keys_out, r_counters, r_prefixes,
-                   r_local_a, r_conf, r_offset);
-        self->receive(
-          [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
-              mem_ref<radix_config>&, mem_ref<val>&) {
-            // nop
-        });
-        self->send(radix_move, r_keys_out, r_keys_in, r_values_out,
-                   r_values_in, r_counters, r_prefixes, r_local_b,
-                   r_local_c, r_conf, r_offset);
-        self->receive(
-          [&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
-              mem_ref<val>&, mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
-              mem_ref<radix_config>&, mem_ref<val>&) {
-            // nop
-        });
+        self->receive([&](mem_ref<val>&, mem_ref<val>&, mem_ref<radix_config>&,
+                          mem_ref<val>&) { });
+        self->send(radix_sum, r_keys_in, r_counters, r_prefixes, r_local_a, 
+                              r_conf, r_offset);
+        self->receive([&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
+                          mem_ref<val>&, 
+                          mem_ref<radix_config>&, mem_ref<val>&) { });
+        self->send(radix_move, r_keys_in, r_keys_out,
+                               //r_values_in, r_values_out,
+                               r_counters, r_prefixes,
+                               r_local_b, r_local_c,
+                               r_conf, r_offset);
+        self->receive([&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
+                          mem_ref<val>&, //mem_ref<val>&, mem_ref<val>&,
+                          mem_ref<val>&, mem_ref<val>&,
+                          mem_ref<radix_config>&, mem_ref<val>&) { });
       }
+      inpt_ref = r_keys_out;
+      temp_ref = r_values_out;
+      chid_ref = dev.scratch_argument<val>(n, buffer_type::output);
+      lits_ref = dev.scratch_argument<val>(n, buffer_type::output);
     }
-    //if (iterations % 2 != 0) {
-    //  // copy input to output ? 
-    //}
-    inpt_ref.swap(r_keys_out);
-    temp_ref.swap(r_values_out);
-    chid_ref = dev.scratch_argument<val>(n, buffer_type::output);
-    lits_ref = dev.scratch_argument<val>(n, buffer_type::output);
-    // clean up fter sort
-    r_keys_in.reset();
-    r_keys_out.reset();
-    r_values_in.reset();
-    r_values_out.reset();
-    r_counters.reset();
-    r_prefixes.reset();
-    r_local_a.reset();
-    r_local_b.reset();
-    r_local_c.reset();
-    r_conf.reset();
     //cout << "DONE: sort_rids_by_value" << endl;
 #ifdef SHOW_TIME_CONSUMPTION
     to = high_resolution_clock::now();
     cout << duration_cast<microseconds>(to - from).count() << " us" << endl;
     from = high_resolution_clock::now();
 #endif
-    /*
     auto inpt_exp = inpt_ref.data();
     auto rids_exp = temp_ref.data();
     if (!inpt_exp || !rids_exp)
@@ -684,12 +650,18 @@ void caf_main(actor_system& system, const config& cfg) {
       auto inp = *inpt_exp;
       auto rid = *rids_exp;
       for (size_t i = 0; i < inp.size(); ++i) {
-        cout << "[" << (inp[i] == input[i]) << "|" << (rid[i] == rids[i]) << "] "
-             << setw(4) << inp[i] << ": "
-             << setw(4) << rid[i] << " =?= " << setw(4) << rids[i] << endl;
+        //cout << "[" << (inp[i] == input[i]) << "|"
+        //     << (rid[i] == rids[i]) << "] "
+        //     << setw(4) << inp[i] << ": "
+        //     << setw(4) << rid[i] << " =?= " << setw(4) << rids[i] << endl;
+        if (inp[i] != input[i])
+          cout << "key mismatch at " << i 
+               << " (" << inp[i] << " =!= " << input[i] << ")" << endl;
+        //if (rid[i] == rids[i])
+        //  cout << "val mismatch at " << i << endl;
       }
     }
-    */
+    return;
     self->send(chunks, temp_ref, chid_ref, lits_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>& /*chid_r*/, mem_ref<val>& /*lit_r*/) {

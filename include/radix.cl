@@ -35,11 +35,11 @@ inline void prefix_local(local uint* data, int len, int threads) {
     for (int i = (j - 1) + (lid * inc); (i + inc) < len; i += threads * inc)
       data[i + j] = data[i] + data[i + j];
     inc = inc << 1;
-    barrier(CLK_LOCAL_MEM_FENCE);
+    barrier(CLK_GLOBAL_MEM_FENCE);
   }
   // downsweep
   data[len - 1] = 0;
-  barrier(CLK_LOCAL_MEM_FENCE);
+  barrier(CLK_GLOBAL_MEM_FENCE);
   while (inc >= 2) {
     int j = inc >> 1;
     for (int i = (j - 1) + (lid * inc); (i + j) <= len; i+= threads * inc) {
@@ -48,7 +48,7 @@ inline void prefix_local(local uint* data, int len, int threads) {
       data[i] = tmp;
     }
     inc = inc >> 1;
-    barrier(CLK_LOCAL_MEM_FENCE);
+    barrier(CLK_GLOBAL_MEM_FENCE);
   }
 }
 
@@ -62,11 +62,11 @@ inline void prefix_global(global uint* data, int len, int threads) {
     for (int i = (j - 1) + (lid * inc); (i + inc) < len ; i += threads * inc)
       data[i + j] = data[i] + data[i + j];
     inc = inc << 1;
-    barrier(CLK_LOCAL_MEM_FENCE);
+    barrier(CLK_GLOBAL_MEM_FENCE);
   }
   // Downsweep
   data[len-1] = 0;
-  barrier(CLK_LOCAL_MEM_FENCE);
+  barrier(CLK_GLOBAL_MEM_FENCE);
   while (inc >= 2) {
     int j = inc >> 1;
     for (int i = (j - 1) + (lid * inc); (i + j) <= len; i += threads * inc) {
@@ -75,7 +75,7 @@ inline void prefix_global(global uint* data, int len, int threads) {
       data[i] = tmp;
     }
     inc = inc >> 1;
-    barrier(CLK_LOCAL_MEM_FENCE);
+    barrier(CLK_GLOBAL_MEM_FENCE);
   }
 }
 
@@ -112,7 +112,7 @@ kernel void count(global uint* cell_in,
         ++counters[start];
         //atomic_inc(&counters[start]);
       }
-      barrier(CLK_LOCAL_MEM_FENCE);
+      barrier(CLK_GLOBAL_MEM_FENCE);
     }
   }
 }
@@ -138,17 +138,17 @@ kernel void sum(global uint* cell_in,
       counts[lid + conf.tpb * k] = counters[j];
       ++k;
     }
-    barrier(CLK_LOCAL_MEM_FENCE);
+    barrier(CLK_GLOBAL_MEM_FENCE);
     // Die einzelnen RadixCounter sind nun in dem counts local Memory
     prefix_local(counts, groups, conf.tpb);
-    barrier(CLK_LOCAL_MEM_FENCE);
+    barrier(CLK_GLOBAL_MEM_FENCE);
     // Gesamtprefix für den aktuellen radix berechnen
     if (lid == 1) {
       prefixes[act_radix]
         = counts[(groups) - 1] + counters[((act_radix + 1) * groups) - 1];
     }
     // Errechnete Prefixsumme zurück in den global memory schreiben
-    barrier(CLK_LOCAL_MEM_FENCE);
+    barrier(CLK_GLOBAL_MEM_FENCE);
     k = 0;
     for (uint j = (act_radix * groups) + lid; j < ((act_radix + 1) * groups);
          j += conf.tpb) {
@@ -187,15 +187,15 @@ kernel void reorder_keys(global uint* cell_in,
     l_prefixes[i] = prefixes[i];
   }
   // Präfixsumme über die RadixCounter bilden.
-  barrier(CLK_LOCAL_MEM_FENCE);
+  barrier(CLK_GLOBAL_MEM_FENCE);
   prefix_local(l_prefixes, conf.radices, conf.tpb);
-  barrier(CLK_LOCAL_MEM_FENCE);
+  barrier(CLK_GLOBAL_MEM_FENCE);
   // Die Präfixsumme des Radixe auf alle subcounter der radixes addieren
   for (uint i = 0; i < conf.rpb; i++) {
     for (uint j = lid; j < groups; j += conf.tpb) {
       l_counters[i * groups + j] += l_prefixes[act_radix + i];
     }
-    // barrier(CLK_LOCAL_MEM_FENCE);
+    // barrier(CLK_GLOBAL_MEM_FENCE);
   }
   // Zurückschreiben der Radixe mit entsprechedem offset.
   for (uint i = 0; i < conf.rpb; i++) {
@@ -206,7 +206,7 @@ kernel void reorder_keys(global uint* cell_in,
       counters[rc_offset + i * groups + idx] = l_counters[i * groups + idx];
     }
   }
-  barrier(CLK_LOCAL_MEM_FENCE);
+  barrier(CLK_GLOBAL_MEM_FENCE);
   int active_block = grp * conf.gpb * conf.epg;
   int active_counter = grp * conf.gpb;
   int active_group = (lid / conf.r_val) * conf.epg;
@@ -222,7 +222,7 @@ kernel void reorder_keys(global uint* cell_in,
         cell_out[counters[idx]] = cell_in[idx];
         ++counters[idx];
       }
-      barrier(CLK_LOCAL_MEM_FENCE);
+      barrier(CLK_GLOBAL_MEM_FENCE);
     }
   }
 }
@@ -259,15 +259,15 @@ kernel void values_by_keys(global uint* cell_in,
   }
   // build prefix sum over radix counters?
   // (seems to be the prefixes, not counters)
-  barrier(CLK_LOCAL_MEM_FENCE);
+  barrier(CLK_GLOBAL_MEM_FENCE);
   prefix_local(l_prefixes, conf.radices, conf.tpb);
-  barrier(CLK_LOCAL_MEM_FENCE);
+  barrier(CLK_GLOBAL_MEM_FENCE);
   // Add the sum of the radix to all subounter of the radixes
   for (uint i = 0; i < conf.rpb; i++) {
     for (uint j = lid; j < groups; j += conf.tpb) {
       l_counters[i * groups + j] += l_prefixes[act_radix + i];
     }
-    // barrier(CLK_LOCAL_MEM_FENCE);
+    // barrier(CLK_GLOBAL_MEM_FENCE);
   }
   // Write back the radixes to their respectve offers
   for (uint i = 0; i < conf.rpb; i++) {
@@ -279,7 +279,7 @@ kernel void values_by_keys(global uint* cell_in,
         = l_counters[i * groups + blockidx];
     }
   }
-  barrier(CLK_LOCAL_MEM_FENCE);
+  barrier(CLK_GLOBAL_MEM_FENCE);
   int active_block = grp * conf.gpb * conf.epg ;
   int active_counter = grp * conf.gpb  ;
   int active_group = (lid / conf.r_val) * conf.epg;
@@ -298,7 +298,7 @@ kernel void values_by_keys(global uint* cell_in,
         ++counters[tmp];
         //atomic_inc(&counters[tmp]);
       }
-      barrier(CLK_LOCAL_MEM_FENCE);
+      barrier(CLK_GLOBAL_MEM_FENCE);
     }
   }
 }
