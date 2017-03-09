@@ -5,6 +5,9 @@
  ******************************************************************************/
 
  // Adapted from: https://github.com/Schw1ng/GPURadixSort
+ // Also, see:
+ // - http://http.developer.nvidia.com/GPUGems3/gpugems3_ch32.html
+ // - http://www.heterogeneouscompute.org/wordpress/wp-content/uploads/2011/06/RadixSort.pdf
 
 typedef struct radix_config {
   uint radices;  // number of radices
@@ -57,18 +60,18 @@ kernel void count(global uint* cell_in,
                   configuration conf,
                   uint offset) {
   uint lid = get_local_id(0);
-  uint grp = get_group_id(0);
+  uint gid = get_group_id(0);
   // Current thread group is based of the local id.
   uint thread_grp = lid / conf.r_val;
   // Startindex of the datablock that corresponds to the Threadblock.
-  int active_block = grp * conf.gpb * conf.epg ;
+  int active_block = gid * conf.gpb * conf.epg ;
   // Offset inside the block for the threadgroup of the current thread.
   int active_group = (lid / conf.r_val) * conf.epg;
   // Number of counters for each radix.
   uint groups = conf.blocks * conf.gpb;
   // Each Threadgroup has its own counter for each radix and is
   // calculating the offset based on current block / group.
-  uint grp_offset = grp * conf.gpb;
+  uint grp_offset = gid * conf.gpb;
   // Startindex for the current thread.
   uint start = active_block + active_group + lid % conf.r_val;
   uint end = min(active_block + active_group + conf.epg, conf.size);
@@ -80,24 +83,24 @@ kernel void count(global uint* cell_in,
       if (lid % conf.r_val == i) {
         uint tmp = (radix * groups) + grp_offset + thread_grp;
         // TODO: Are atomics needed or is the fence enough?
-        atomic_inc(&counters[tmp]);
-        // ++counters[tmp];
+        //atomic_inc(&counters[tmp]);
+        ++counters[tmp];
       }
       barrier(CLK_GLOBAL_MEM_FENCE);
     }
   }
 }
 
-kernel void sum(global uint* cell_in,
-                global volatile uint* counters,
-                global uint* prefixes,
-                local uint* l_counters,
-                configuration conf,
-                uint offset) {
+kernel void scan(global uint* cell_in,
+                 global volatile uint* counters,
+                 global uint* prefixes,
+                 local uint* l_counters,
+                 configuration conf,
+                 uint offset) {
   const uint lid = get_local_id(0);
-  const uint grp = get_group_id(0);
+  const uint gid = get_group_id(0);
   const uint groups = conf.blocks * conf.gpb;
-  uint radix = conf.rpb * grp;
+  uint radix = conf.rpb * gid;
   for (uint i = 0; i < conf.rpb; ++i) {
     uint start = (radix * groups) + lid;
     uint end = (radix + 1) * groups;
@@ -130,18 +133,18 @@ kernel void sum(global uint* cell_in,
   }
 }
 
-kernel void values(global uint* cell_in,
-                   global uint* cell_out,
-                   global uint* counters,
-                   global uint* prefixes,
-                   local uint* l_counters,
-                   local uint* l_prefixes,
-                   configuration conf,
-                   uint offset) {
+kernel void reorder(global uint* cell_in,
+                    global uint* cell_out,
+                    global uint* counters,
+                    global uint* prefixes,
+                    local uint* l_counters,
+                    local uint* l_prefixes,
+                    configuration conf,
+                    uint offset) {
   uint lid = get_local_id(0);
-  uint grp = get_group_id(0);
+  uint gid = get_group_id(0);
   uint thread_grp = lid / conf.r_val;
-  uint radix = conf.rpb * grp;
+  uint radix = conf.rpb * gid;
   uint groups = conf.gpb * conf.blocks;
   uint rc_offset = radix * groups;
   // erst abschließen der radix summierung
@@ -174,8 +177,8 @@ kernel void values(global uint* cell_in,
     barrier(CLK_GLOBAL_MEM_FENCE);
   }
   barrier(CLK_GLOBAL_MEM_FENCE);
-  uint active_block = grp * conf.gpb * conf.epg;
-  uint active_counter = grp * conf.gpb;
+  uint active_block = gid * conf.gpb * conf.epg;
+  uint active_counter = gid * conf.gpb;
   uint active_group = (lid / conf.r_val) * conf.epg;
   uint start = active_block + active_group + lid % conf.r_val;
   uint end = min(active_block + active_group + conf.epg, conf.size);
@@ -186,28 +189,28 @@ kernel void values(global uint* cell_in,
         uint tmp = bits * groups + active_counter + thread_grp;
         cell_out[counters[tmp]] = cell_in[i];
         // TODO: do we need atomics or is the barrier enough?
-        //++counters[tmp];
-        atomic_inc(&counters[tmp]);
+        //atomic_inc(&counters[tmp]);
+        ++counters[tmp];
       }
       barrier(CLK_GLOBAL_MEM_FENCE);
     }
   }
 }
 
-kernel void values_by_keys(global uint* cell_in,
-                           global uint* cell_out,
-                           global uint* value_in, 
-                           global uint* value_out,
-                           global uint* counters,
-                           global uint* prefixes,
-                           local uint* l_counters,
-                           local uint* l_prefixes,
-                           configuration conf, 
-                           uint offset) {
+kernel void reorder_kv(global uint* cell_in,
+                       global uint* cell_out,
+                       global uint* value_in,
+                       global uint* value_out,
+                       global uint* counters,
+                       global uint* prefixes,
+                       local uint* l_counters,
+                       local uint* l_prefixes,
+                       configuration conf,
+                       uint offset) {
   uint lid = get_local_id(0);
-  uint grp = get_group_id(0);
+  uint gid = get_group_id(0);
   uint thread_grp = lid / conf.r_val;
-  uint act_radix = conf.rpb * grp;
+  uint act_radix = conf.rpb * gid;
   uint groups = conf.gpb * conf.blocks;
   int rc_offset = act_radix * groups;
   // Finish the radix sum
@@ -247,8 +250,8 @@ kernel void values_by_keys(global uint* cell_in,
     }
   }
   barrier(CLK_GLOBAL_MEM_FENCE);
-  int active_block = grp * conf.gpb * conf.epg ;
-  int active_counter = grp * conf.gpb  ;
+  int active_block = gid * conf.gpb * conf.epg ;
+  int active_counter = gid * conf.gpb  ;
   int active_group = (lid / conf.r_val) * conf.epg;
   uint idx = active_block + active_group +  lid % conf.r_val;
   //uint boundary = active_block + active_group + conf.epg;

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 2.8)
-project(wah C CXX)
+project(indexing C CXX)
 
 set (CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
