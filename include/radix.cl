@@ -52,33 +52,6 @@ inline void prefix_local(local uint* data, int len, int threads) {
   }
 }
 
-// The `global` thing here is just the memory placement, right?
-inline void prefix_global(global uint* data, int len, int threads) {
-  uint lid = get_local_id(0);
-  int inc = 2;
-  // reduce
-  while (inc <= len) {
-    int j = inc >> 1;
-    for (int i = (j - 1) + (lid * inc); (i + inc) < len ; i += threads * inc)
-      data[i + j] = data[i] + data[i + j];
-    inc = inc << 1;
-    barrier(CLK_GLOBAL_MEM_FENCE);
-  }
-  // Downsweep
-  data[len-1] = 0;
-  barrier(CLK_GLOBAL_MEM_FENCE);
-  while (inc >= 2) {
-    int j = inc >> 1;
-    for (int i = (j - 1) + (lid * inc); (i + j) <= len; i += threads * inc) {
-      uint tmp = data[i + j];
-      data[i + j] = data[i] + data[i + j];
-      data[i] = tmp;
-    }
-    inc = inc >> 1;
-    barrier(CLK_GLOBAL_MEM_FENCE);
-  }
-}
-
 kernel void count(global uint* cell_in,
                   global volatile uint* counters,
                   configuration conf,
@@ -98,19 +71,17 @@ kernel void count(global uint* cell_in,
   uint grp_offset = grp * conf.gpb;
   // Startindex for the current thread.
   uint start = active_block + active_group + lid % conf.r_val;
-  //uint end = active_block + active_group + conf.epg;
-  //end = (end > conf.size) ? conf.size : end;
   uint end = min(active_block + active_group + conf.epg, conf.size);
   for (;start < end; start += conf.tpg) {
-    uint act_radix = (cell_in[start] >> offset) & conf.mask;
+    uint radix = (cell_in[start] >> offset) & conf.mask;
     // The following code ensures that the counters of each Threadgroup
     // are sequentially incremented.
-    for (uint i = 0 ; i < conf.r_val; i++) {
+    for (uint i = 0; i < conf.r_val; i++) {
       if (lid % conf.r_val == i) {
-        uint start = (act_radix * groups) + grp_offset + thread_grp;
-        // TODO: not a big fan of this, maybe use atomics?
-        ++counters[start];
-        //atomic_inc(&counters[start]);
+        uint tmp = (radix * groups) + grp_offset + thread_grp;
+        // TODO: Are atomics needed or is the fence enough?
+        atomic_inc(&counters[tmp]);
+        // ++counters[tmp];
       }
       barrier(CLK_GLOBAL_MEM_FENCE);
     }
@@ -120,42 +91,42 @@ kernel void count(global uint* cell_in,
 kernel void sum(global uint* cell_in,
                 global volatile uint* counters,
                 global uint* prefixes,
-                local uint* counts,
+                local uint* l_counters,
                 configuration conf,
                 uint offset) {
-  uint lid = get_local_id(0);
-  uint grp = get_group_id(0);
-  uint groups = conf.blocks * conf.gpb;
-  uint act_radix = conf.rpb * grp;
-  for (uint i = 0; i < conf.rpb; i++) {
-    // The Num_Groups counters of the radix are read from global memory to
-    // shared memory. Jeder Thread liest die Counter basierend auf der localid aus
+  const uint lid = get_local_id(0);
+  const uint grp = get_group_id(0);
+  const uint groups = conf.blocks * conf.gpb;
+  uint radix = conf.rpb * grp;
+  for (uint i = 0; i < conf.rpb; ++i) {
+    uint start = (radix * groups) + lid;
+    uint end = (radix + 1) * groups;
+    // Copy groups counters of the radix to local memory
     int k = 0;
-    uint boarder = ((act_radix + 1) * groups);
-    // boarder = (boarder > conf.blocks * conf.gpb)
-    //         ? conf.blocks * conf.gpb : boarder;
-    for (uint j = (act_radix * groups) + lid; j < boarder; j+= conf.tpb) {
-      counts[lid + conf.tpb * k] = counters[j];
+    for (uint j = start; j < end; j+= conf.tpb) {
+      l_counters[lid + conf.tpb * k] = counters[j];
       ++k;
+      // barrier(CLK_LOCAL_MEM_FENCE); // TODO: ?
     }
-    barrier(CLK_GLOBAL_MEM_FENCE);
-    // Die einzelnen RadixCounter sind nun in dem counts local Memory
-    prefix_local(counts, groups, conf.tpb);
-    barrier(CLK_GLOBAL_MEM_FENCE);
+    barrier(CLK_LOCAL_MEM_FENCE);
+    // prefix sum on the counters in local memory
+    prefix_local(l_counters, groups, conf.tpb);
+    barrier(CLK_LOCAL_MEM_FENCE);
     // Gesamtprefix für den aktuellen radix berechnen
     if (lid == 1) {
-      prefixes[act_radix]
-        = counts[(groups) - 1] + counters[((act_radix + 1) * groups) - 1];
+      prefixes[radix]
+        = l_counters[groups - 1] + counters[((radix + 1) * groups) - 1];
     }
-    // Errechnete Prefixsumme zurück in den global memory schreiben
+    // Write prefix sum back to global memory
     barrier(CLK_GLOBAL_MEM_FENCE);
     k = 0;
-    for (uint j = (act_radix * groups) + lid; j < ((act_radix + 1) * groups);
-         j += conf.tpb) {
-      counters[j] = counts[lid + conf.tpb * k];
+    for (uint j = start; j < end; j += conf.tpb) {
+      counters[j] = l_counters[lid + conf.tpb * k];
       ++k;
+      // barrier(CLK_GLOBAL_MEM_FENCE); // TODO: ?
     }
-    ++act_radix;
+    ++radix;
+    barrier(CLK_GLOBAL_MEM_FENCE);
   }
 }
 
@@ -170,57 +141,53 @@ kernel void values(global uint* cell_in,
   uint lid = get_local_id(0);
   uint grp = get_group_id(0);
   uint thread_grp = lid / conf.r_val;
-  uint act_radix = conf.rpb * grp;
+  uint radix = conf.rpb * grp;
   uint groups = conf.gpb * conf.blocks;
-  int rc_offset = act_radix * groups;
+  uint rc_offset = radix * groups;
   // erst abschließen der radix summierung
   for (uint i = 0 ; i < conf.rpb ; i++) {
-    for (uint idx = lid; idx < groups; idx += conf.tpb) {
-      // The Num_Groups counters of the radix are read from global memory
-      // to shared memory. Jeder Thread liest die Counter basierend auf der
-      // groupId aus
-      l_counters[i * groups + idx] = counters[rc_offset + i * groups + idx];
+    for (uint j = lid; j < groups; j += conf.tpb) {
+      l_counters[i * groups + j] = counters[rc_offset + i * groups + j];
     }
+    barrier(CLK_LOCAL_MEM_FENCE);
   }
   // Read radix prefixes to localMemory
   for (uint i = lid; i < conf.radices; i += conf.tpb) {
     l_prefixes[i] = prefixes[i];
   }
-  // Präfixsumme über die RadixCounter bilden.
-  barrier(CLK_GLOBAL_MEM_FENCE);
+  // prefix sum on the prefixes in local memory
+  barrier(CLK_LOCAL_MEM_FENCE);
   prefix_local(l_prefixes, conf.radices, conf.tpb);
-  barrier(CLK_GLOBAL_MEM_FENCE);
-  // Die Präfixsumme des Radixe auf alle subcounter der radixes addieren
+  barrier(CLK_LOCAL_MEM_FENCE);
+  // add prefix sum to the subcounters
+  for (uint i = 0; i < conf.rpb; ++i) {
+    for (uint j = lid; j < groups; j += conf.tpb) {
+      l_counters[i * groups + j] += l_prefixes[radix + i];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+  }
+  // Write back radices at the calculated offsets
   for (uint i = 0; i < conf.rpb; i++) {
     for (uint j = lid; j < groups; j += conf.tpb) {
-      l_counters[i * groups + j] += l_prefixes[act_radix + i];
+      counters[rc_offset + i * groups + j] = l_counters[i * groups + j];
     }
-    // barrier(CLK_GLOBAL_MEM_FENCE);
-  }
-  // Zurückschreiben der Radixe mit entsprechedem offset.
-  for (uint i = 0; i < conf.rpb; i++) {
-    for (uint idx = lid; idx < groups; idx += conf.tpb) {
-      // The Num_Groups counters of the radix are read from global memory
-      // to shared memory. Jeder Thread liest die Counter basierend auf
-      // der groupId aus
-      counters[rc_offset + i * groups + idx] = l_counters[i * groups + idx];
-    }
+    barrier(CLK_GLOBAL_MEM_FENCE);
   }
   barrier(CLK_GLOBAL_MEM_FENCE);
-  int active_block = grp * conf.gpb * conf.epg;
-  int active_counter = grp * conf.gpb;
-  int active_group = (lid / conf.r_val) * conf.epg;
-  uint idx = active_block + active_group + lid % conf.r_val;
-  //uint boundary = active_block + active_group + conf.epg;
-  //boundary = (boundary < conf.size) ? boundary : conf.size;
-  uint boundary = min(active_block + active_group + conf.epg, conf.size);
-  for (; idx < boundary; idx += conf.tpg) {
-    uint tmpRdx = (cell_in[idx] >> offset) & conf.mask;
-    for (uint tmpIdx = 0; tmpIdx < conf.r_val; tmpIdx++) {
-      if (lid % conf.r_val == tmpIdx) {
-        uint idx = tmpRdx * groups + active_counter + thread_grp;
-        cell_out[counters[idx]] = cell_in[idx];
-        ++counters[idx];
+  uint active_block = grp * conf.gpb * conf.epg;
+  uint active_counter = grp * conf.gpb;
+  uint active_group = (lid / conf.r_val) * conf.epg;
+  uint start = active_block + active_group + lid % conf.r_val;
+  uint end = min(active_block + active_group + conf.epg, conf.size);
+  for (uint i = start; i < end; i += conf.tpg) {
+    uint bits = (cell_in[i] >> offset) & conf.mask;
+    for (uint j = 0; j < conf.r_val; ++j) {
+      if (lid % conf.r_val == j) {
+        uint tmp = bits * groups + active_counter + thread_grp;
+        cell_out[counters[tmp]] = cell_in[i];
+        // TODO: do we need atomics or is the barrier enough?
+        //++counters[tmp];
+        atomic_inc(&counters[tmp]);
       }
       barrier(CLK_GLOBAL_MEM_FENCE);
     }
