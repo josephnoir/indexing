@@ -441,33 +441,37 @@ void caf_main(actor_system& system, const config& cfg) {
   // create spawn configuration
   auto n = values.size();
   auto index_space = spawn_config{dim_vec{n}};
-  //auto index_space_half = spawn_config{dim_vec{n / 2}};
-  //auto wi = 128 * ((n / 128) + ((n % 128) ? 1 : 0));
   auto wi = round_up(n, 128);
   auto index_space_128  = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
 
-  // buffers for execution
+  // buffers we alread know we need
   vec config{static_cast<val>(n)};
   auto inpt_ref = dev.global_argument(values, buffer_type::input_output);
-  // TODO: should be scratch space, but output is useful for testing
   auto chid_ref = dev.scratch_argument<val>(n, buffer_type::output);
   auto lits_ref = dev.scratch_argument<val>(n, buffer_type::output);
   auto temp_ref = dev.scratch_argument<val>(n, buffer_type::output);
 
   // sort configuration
+  // thread block has multiple thread groups has multiple threads
+  // - blocks match to OpenCL work groups
+  // - threads map to work items
+  // - groups are some inbetween thing
   // TODO: Optimized runs with regard to cardinality
   uint32_t l_val = 4; // bits used as a bucket in each radix iteration
   uint32_t radices = 1 << l_val;
-  uint32_t blocks = dev.get_max_compute_units(); // (adjust at will, was 16)
-  uint32_t threads_per_block = dev.get_max_work_group_size(); // (same, was 512)
-  uint32_t r_val = 8; // threads per group
+  uint32_t blocks = 1; //min(dev.get_max_compute_units(), radices); // (adjust at will, was 16)
+  uint32_t threads_per_block = 16; //dev.get_max_work_group_size(); // (same, was 512)
+  uint32_t r_val = 8; // threads per group, why is this in here twice?
   uint32_t groups_per_block = threads_per_block / r_val; // ...
-  uint32_t mask = 0xF; // extract l_val length bits via bitmask
-  uint32_t threads_per_group = threads_per_block / groups_per_block;
+  uint32_t mask = (1 << l_val) - 1; // bitmask that match lval bits (was 0xF)
+  uint32_t threads_per_group = threads_per_block / groups_per_block; // == r_val?
   uint32_t radices_per_block = radices / blocks;
   uint32_t elements = static_cast<uint32_t>(n);
-  uint32_t elements_per_group = 1 + (elements / (blocks * groups_per_block));
-  //vector<uint32_t> rc{
+  uint32_t groups = groups_per_block * blocks;
+  uint32_t elements_per_group = (elements / groups) + 1;
+  // groups share a counter and each group requires a counter per radix
+  uint32_t counters = radices * groups_per_block * blocks;
+  uint32_t prefixes = radices;
   radix_config rc = {
     radices,
     blocks,
@@ -481,8 +485,54 @@ void caf_main(actor_system& system, const config& cfg) {
     threads_per_block,
     elements
   };
-  uint32_t counters = radices * groups_per_block * blocks;
-  uint32_t prefixes = radices;
+  auto print_counters = [&](mem_ref<val>& ref, const string& step, val offset) {
+    auto expected = ref.data();
+    auto data = *expected;
+    stringstream oss;
+    oss << "Counters (" << step << ", " << offset << "): " << endl;
+    for (int i = 0; i < 10; ++i)
+      oss << "----------";
+    oss << endl;
+    oss << "          ";
+    for (uint32_t j = 0; j < blocks; j++)
+      oss << setw(21) << "Block" << setw(3) << to_string(j);
+    oss << endl;
+    for (int i = 0; i < 10; ++i)
+      oss << "----------";
+    oss << endl;
+    for (uint32_t i = 0; i < radices; i++) {
+      oss << setw(11) << "Radix" << setw(3) << i;
+      for (uint32_t j = 0; j < blocks; j++) {
+        oss << "     ";
+        for (uint32_t k = 0; k < groups_per_block; k++) {
+          oss << setw(6) << hex
+              << data[i * blocks * groups_per_block + j * groups_per_block + k];
+        }
+      }
+      oss << endl;
+    }
+    return oss.str();
+  };
+  auto print_prefixes = [&](mem_ref<val>& ref, const string& step, val offset) {
+    auto expected = ref.data();
+    auto data = *expected;
+    stringstream oss;
+    oss << "Prefixes (" << step << ", " << offset << "): " << endl;
+    for (auto& e : data)
+      oss << e << " ";
+    oss << endl;
+    return oss.str();
+  };
+  auto print_values = [&](mem_ref<val>& ref, const string& step, val offset) {
+    auto expected = ref.data();
+    auto data = *expected;
+    stringstream oss;
+    oss << "Values (" << step << ", " << offset << "): " << endl;
+    for (auto& e : data)
+      oss << e << " ";
+    oss << endl;
+    return oss.str();
+  };
   size_t radix_global = threads_per_block * blocks;
   size_t radix_local = threads_per_block;
   auto radix_range = spawn_config{dim_vec{radix_global}, {},
@@ -574,8 +624,7 @@ void caf_main(actor_system& system, const config& cfg) {
       conf_ref = dev.global_argument(config, buffer_type::input);
       self->send(rids_2, conf_ref, inpt_ref, temp_ref);
       self->receive_while([&] { return !done; })(
-        [&](mem_ref<val>& conf, mem_ref<val>& vals,
-            mem_ref<val>& rids) {
+        [&](mem_ref<val>& conf, mem_ref<val>& vals, mem_ref<val>& rids) {
           inc >>= 1;
           if (inc > 0) {
             config[0] = inc;
@@ -588,15 +637,16 @@ void caf_main(actor_system& system, const config& cfg) {
       );
     }
     */
+    stringstream debug;
     {
       // radix sort for values by key using inpt as keys and temp as values
       auto r_keys_in = inpt_ref;
       auto r_keys_out = chid_ref;
       auto r_values_in = temp_ref;
       auto r_values_out = lits_ref;
-      auto r_counters = dev.scratch_argument<val>(counters);
-      auto r_prefixes = dev.scratch_argument<val>(prefixes);
-      auto r_local_a = dev.local_argument<val>(blocks * groups_per_block);
+      auto r_counters = dev.scratch_argument<val>(counters, buffer_type::output);
+      auto r_prefixes = dev.scratch_argument<val>(prefixes, buffer_type::output);
+      auto r_local_a = dev.local_argument<val>(groups_per_block * blocks);
       auto r_local_b = dev.local_argument<val>(groups_per_block * blocks *
                                                radices_per_block);
       auto r_local_c = dev.local_argument<val>(radices);
@@ -613,11 +663,15 @@ void caf_main(actor_system& system, const config& cfg) {
         self->send(radix_count, r_keys_in, r_counters, r_conf, r_offset);
         self->receive([&](mem_ref<val>&, mem_ref<val>&, mem_ref<radix_config>&,
                           mem_ref<val>&) { });
+        debug << print_prefixes(r_prefixes, "count", l_val * i);
+        debug << print_counters(r_counters, "count", l_val * i);
         self->send(radix_sum, r_keys_in, r_counters, r_prefixes, r_local_a,
                               r_conf, r_offset);
         self->receive([&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
                           mem_ref<val>&,
                           mem_ref<radix_config>&, mem_ref<val>&) { });
+        debug << print_prefixes(r_prefixes, "sum", l_val * i);
+        debug << print_counters(r_counters, "sum", l_val * i);
         self->send(radix_move, r_keys_in, r_keys_out,
                                //r_values_in, r_values_out,
                                r_counters, r_prefixes,
@@ -627,6 +681,8 @@ void caf_main(actor_system& system, const config& cfg) {
                           mem_ref<val>&, //mem_ref<val>&, mem_ref<val>&,
                           mem_ref<val>&, mem_ref<val>&,
                           mem_ref<radix_config>&, mem_ref<val>&) { });
+        debug << print_prefixes(r_prefixes, "reorder", l_val * i);
+        debug << print_counters(r_counters, "reorder", l_val * i);
       }
       inpt_ref = r_keys_out;
       temp_ref = r_values_out;
@@ -646,23 +702,32 @@ void caf_main(actor_system& system, const config& cfg) {
     else {
       auto inp = *inpt_exp;
       auto rid = *rids_exp;
-      auto failed = 0;
+      vector<size_t> failed;
       for (size_t i = 0; i < inp.size(); ++i) {
         //cout << "[" << (inp[i] == input[i]) << "|"
         //     << (rid[i] == rids[i]) << "] "
         //     << setw(4) << inp[i] << ": "
         //     << setw(4) << rid[i] << " =?= " << setw(4) << rids[i] << endl;
         if (inp[i] != input[i])
-          ++failed;
+          failed.push_back(i);
         //  cout << "key mismatch at " << i
         //       << " (" << inp[i] << " =!= " << input[i] << ")" << endl;
         //if (rid[i] == rids[i])
         //  cout << "val mismatch at " << i << endl;
       }
-      if (failed > 0)
-        cout << "Failed for " << failed << " values." << endl;
-      else
-        cout << "Success." << endl;
+      if (failed.empty()) {
+        //cout << "Success." << endl;
+//        cout << debug.str() << endl;
+      } else {
+        cout << "Failed for " << failed.size() << " values." << endl;
+//        if (failed.size() < 20) {
+//          cout << ">> ";
+//          for (auto f : failed)
+//            cout << f << " ";
+//          cout << endl;
+//        }
+        cout << debug.str() << endl;
+      }
     }
     return;
     self->send(chunks, temp_ref, chid_ref, lits_ref);
