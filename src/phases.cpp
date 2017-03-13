@@ -31,7 +31,6 @@ struct radix_config {
   uint32_t radices;  // number of radices
   uint32_t blocks;   // number of blocks
   uint32_t gpb;      // groups per block
-  uint32_t r_val;    // R
   uint32_t tpg;      // threads per group
   uint32_t epg;      // elements per group
   uint32_t rpb;      // radices per block
@@ -333,12 +332,6 @@ val round_up(val numToRound, val multiple)  {
 }
 
 /*****************************************************************************\
-                              USED FOR RADIX SORT
-\*****************************************************************************/
-
-
-
-/*****************************************************************************\
                           INTRODUCE SOME CLI ARGUMENTS
 \*****************************************************************************/
 
@@ -347,7 +340,7 @@ public:
   string filename = "";
   val bound = 0;
   int loops = 1;
-  string device_name = "GeForce GT 650M";
+  string device_name = "GeForce GTX 780M";
   bool print_results;
   config() {
     load<opencl::manager>();
@@ -454,17 +447,16 @@ void caf_main(actor_system& system, const config& cfg) {
   // sort configuration
   // thread block has multiple thread groups has multiple threads
   // - blocks match to OpenCL work groups
-  // - threads map to work items
-  // - groups are some inbetween thing
+  // - threads map to work items, but ids are counted inside a block
+  // - groups separate threads of a block into multiple bundles
   // TODO: Optimized runs with regard to cardinality
   uint32_t l_val = 4; // bits used as a bucket in each radix iteration
   uint32_t radices = 1 << l_val;
-  uint32_t blocks = min(dev.get_max_compute_units(), radices); // (adjust at will, was 16)
-  uint32_t threads_per_block = dev.get_max_work_group_size(); // (same, was 512)
-  uint32_t r_val = 8; // threads per group, why is this in here twice?
-  uint32_t groups_per_block = threads_per_block / r_val; // ...
-  uint32_t mask = (1 << l_val) - 1; // bitmask that match lval bits (was 0xF)
-  uint32_t threads_per_group = threads_per_block / groups_per_block; // == r_val?
+  uint32_t blocks = 8; //min(dev.get_max_compute_units(), radices);
+  uint32_t threads_per_block = 512; //dev.get_max_work_group_size();
+  uint32_t threads_per_group = 8; //threads_per_block / radices;
+  uint32_t groups_per_block = threads_per_block / threads_per_group;
+  uint32_t mask = (1 << l_val) - 1;
   uint32_t radices_per_block = radices / blocks;
   uint32_t elements = static_cast<uint32_t>(n);
   uint32_t groups = groups_per_block * blocks;
@@ -476,7 +468,6 @@ void caf_main(actor_system& system, const config& cfg) {
     radices,
     blocks,
     groups_per_block,
-    r_val,
     threads_per_group,
     elements_per_group,
     radices_per_block,
@@ -648,8 +639,7 @@ void caf_main(actor_system& system, const config& cfg) {
       auto r_counters = dev.scratch_argument<val>(counters, buffer_type::output);
       auto r_prefixes = dev.scratch_argument<val>(prefixes, buffer_type::output);
       auto r_local_a = dev.local_argument<val>(groups_per_block * blocks);
-      auto r_local_b = dev.local_argument<val>(groups_per_block * blocks *
-                                               radices_per_block);
+      auto r_local_b = dev.local_argument<val>(groups_per_block * radices);
       auto r_local_c = dev.local_argument<val>(radices);
       auto r_conf = dev.private_argument(rc);
       uint32_t iterations = sizeof(val) * 8 / l_val;
