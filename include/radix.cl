@@ -144,15 +144,12 @@ kernel void reorder(global uint* cell_in, global uint* cell_out,
   barrier(CLK_LOCAL_MEM_FENCE);
   prefix_sum(l_prefixes, conf.radices, conf.tpb);
   barrier(CLK_LOCAL_MEM_FENCE);
-  // Load (groups per block * radices) counters, i.e., one colum
-  // Load counters, adding the global radix prefixes
+  // Load (groups per block * radices) counters, i.e., the block column
   for (uint i = 0; i < conf.gpb; ++i) {
     if (thread < conf.radices) {
       l_counters[thread * conf.gpb + i]
         = counters[thread * entries + block * conf.gpb + i] + l_prefixes[thread];
     }
-    //l_counters[i * entries + j] = counters[i * entries + rc_offset + j]
-    //                              + l_prefixes[radix + i];
   }
   barrier(CLK_LOCAL_MEM_FENCE);
   const uint group_offset = block * conf.gpb;
@@ -168,8 +165,6 @@ kernel void reorder(global uint* cell_in, global uint* cell_out,
       if (group_thread == j) {
         cell_out[l_counters[index]] = cell_in[i];
         ++l_counters[index];
-        //uint old = atomic_inc(&counters[index]);
-        //cell_out[old] = cell_in[i];
       }
       barrier(CLK_LOCAL_MEM_FENCE);
     }
