@@ -459,8 +459,8 @@ void caf_main(actor_system& system, const config& cfg) {
   // TODO: Optimized runs with regard to cardinality
   uint32_t l_val = 4; // bits used as a bucket in each radix iteration
   uint32_t radices = 1 << l_val;
-  uint32_t blocks = 1; //min(dev.get_max_compute_units(), radices); // (adjust at will, was 16)
-  uint32_t threads_per_block = 16; //dev.get_max_work_group_size(); // (same, was 512)
+  uint32_t blocks = min(dev.get_max_compute_units(), radices); // (adjust at will, was 16)
+  uint32_t threads_per_block = dev.get_max_work_group_size(); // (same, was 512)
   uint32_t r_val = 8; // threads per group, why is this in here twice?
   uint32_t groups_per_block = threads_per_block / r_val; // ...
   uint32_t mask = (1 << l_val) - 1; // bitmask that match lval bits (was 0xF)
@@ -485,54 +485,55 @@ void caf_main(actor_system& system, const config& cfg) {
     threads_per_block,
     elements
   };
-  auto print_counters = [&](mem_ref<val>& ref, const string& step, val offset) {
-    auto expected = ref.data();
-    auto data = *expected;
-    stringstream oss;
-    oss << "Counters (" << step << ", " << offset << "): " << endl;
-    for (int i = 0; i < 10; ++i)
-      oss << "----------";
-    oss << endl;
-    oss << "          ";
-    for (uint32_t j = 0; j < blocks; j++)
-      oss << setw(21) << "Block" << setw(3) << to_string(j);
-    oss << endl;
-    for (int i = 0; i < 10; ++i)
-      oss << "----------";
-    oss << endl;
-    for (uint32_t i = 0; i < radices; i++) {
-      oss << setw(11) << "Radix" << setw(3) << i;
-      for (uint32_t j = 0; j < blocks; j++) {
-        oss << "     ";
-        for (uint32_t k = 0; k < groups_per_block; k++) {
-          oss << setw(6) << hex
-              << data[i * blocks * groups_per_block + j * groups_per_block + k];
-        }
-      }
-      oss << endl;
-    }
-    return oss.str();
-  };
-  auto print_prefixes = [&](mem_ref<val>& ref, const string& step, val offset) {
-    auto expected = ref.data();
-    auto data = *expected;
-    stringstream oss;
-    oss << "Prefixes (" << step << ", " << offset << "): " << endl;
-    for (auto& e : data)
-      oss << e << " ";
-    oss << endl;
-    return oss.str();
-  };
-  auto print_values = [&](mem_ref<val>& ref, const string& step, val offset) {
-    auto expected = ref.data();
-    auto data = *expected;
-    stringstream oss;
-    oss << "Values (" << step << ", " << offset << "): " << endl;
-    for (auto& e : data)
-      oss << e << " ";
-    oss << endl;
-    return oss.str();
-  };
+//  auto print_counters = [&](mem_ref<val>& ref, const string& step, val offset) {
+//    auto expected = ref.data();
+//    auto data = *expected;
+//    stringstream oss;
+//    oss << "Counters (" << step << ", " << offset << "): " << endl;
+//    for (int i = 0; i < 10; ++i)
+//      oss << "----------";
+//    oss << endl;
+//    oss << "          ";
+//    for (uint32_t j = 0; j < blocks; j++)
+//      oss << "                                         "
+//          << "Block" << setw(3) << to_string(j);
+//    oss << endl;
+//    for (int i = 0; i < 10; ++i)
+//      oss << "----------";
+//    oss << endl;
+//    for (uint32_t i = 0; i < radices; i++) {
+//      oss << "                     " << "Radix" << setw(3) << i;
+//      for (uint32_t j = 0; j < blocks; j++) {
+//        oss << "     ";
+//        for (uint32_t k = 0; k < groups_per_block; k++) {
+//          oss << setw(6) << hex
+//              << data[i * blocks * groups_per_block + j * groups_per_block + k];
+//        }
+//      }
+//      oss << endl;
+//    }
+//    return oss.str();
+//  };
+//  auto print_prefixes = [&](mem_ref<val>& ref, const string& step, val offset) {
+//    auto expected = ref.data();
+//    auto data = *expected;
+//    stringstream oss;
+//    oss << "Prefixes (" << step << ", " << offset << "): " << endl;
+//    for (auto& e : data)
+//      oss << e << " ";
+//    oss << endl;
+//    return oss.str();
+//  };
+//  auto print_values = [&](mem_ref<val>& ref, const string& step, val offset) {
+//    auto expected = ref.data();
+//    auto data = *expected;
+//    stringstream oss;
+//    oss << "Values (" << step << ", " << offset << "): " << endl;
+//    for (auto& e : data)
+//      oss << e << " ";
+//    oss << endl;
+//    return oss.str();
+//  };
   size_t radix_global = threads_per_block * blocks;
   size_t radix_local = threads_per_block;
   auto radix_range = spawn_config{dim_vec{radix_global}, {},
@@ -637,7 +638,7 @@ void caf_main(actor_system& system, const config& cfg) {
       );
     }
     */
-    stringstream debug;
+//    stringstream debug;
     {
       // radix sort for values by key using inpt as keys and temp as values
       auto r_keys_in = inpt_ref;
@@ -663,15 +664,15 @@ void caf_main(actor_system& system, const config& cfg) {
         self->send(radix_count, r_keys_in, r_counters, r_conf, r_offset);
         self->receive([&](mem_ref<val>&, mem_ref<val>&, mem_ref<radix_config>&,
                           mem_ref<val>&) { });
-        debug << print_prefixes(r_prefixes, "count", l_val * i);
-        debug << print_counters(r_counters, "count", l_val * i);
+//        debug << print_prefixes(r_prefixes, "count", l_val * i);
+//        debug << print_counters(r_counters, "count", l_val * i);
         self->send(radix_sum, r_keys_in, r_counters, r_prefixes, r_local_a,
                               r_conf, r_offset);
         self->receive([&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
                           mem_ref<val>&,
                           mem_ref<radix_config>&, mem_ref<val>&) { });
-        debug << print_prefixes(r_prefixes, "sum", l_val * i);
-        debug << print_counters(r_counters, "sum", l_val * i);
+//        debug << print_prefixes(r_prefixes, "sum", l_val * i);
+//        debug << print_counters(r_counters, "sum", l_val * i);
         self->send(radix_move, r_keys_in, r_keys_out,
                                //r_values_in, r_values_out,
                                r_counters, r_prefixes,
@@ -681,8 +682,8 @@ void caf_main(actor_system& system, const config& cfg) {
                           mem_ref<val>&, //mem_ref<val>&, mem_ref<val>&,
                           mem_ref<val>&, mem_ref<val>&,
                           mem_ref<radix_config>&, mem_ref<val>&) { });
-        debug << print_prefixes(r_prefixes, "reorder", l_val * i);
-        debug << print_counters(r_counters, "reorder", l_val * i);
+//        debug << print_prefixes(r_prefixes, "reorder", l_val * i);
+//        debug << print_counters(r_counters, "reorder", l_val * i);
       }
       inpt_ref = r_keys_out;
       temp_ref = r_values_out;
@@ -716,7 +717,7 @@ void caf_main(actor_system& system, const config& cfg) {
         //  cout << "val mismatch at " << i << endl;
       }
       if (failed.empty()) {
-        //cout << "Success." << endl;
+        cout << "Success." << endl;
 //        cout << debug.str() << endl;
       } else {
         cout << "Failed for " << failed.size() << " values." << endl;
@@ -726,7 +727,7 @@ void caf_main(actor_system& system, const config& cfg) {
 //            cout << f << " ";
 //          cout << endl;
 //        }
-        cout << debug.str() << endl;
+//        cout << debug.str() << endl;
       }
     }
     return;
