@@ -142,7 +142,6 @@ string decoded_bitmap(const vec& bitmap) {
         TESTS FUNCTIONS ON CPU FOR COMPARISON (TODO: DELTE THIS LATER)
 \*****************************************************************************/
 
-/*
 // in : input
 // out: input, rids (both sorted by input)
 void sort_rids_by_value(vector<uint32_t>& input, vector<uint32_t>& rids) {
@@ -164,6 +163,7 @@ void sort_rids_by_value(vector<uint32_t>& input, vector<uint32_t>& rids) {
   }
 }
 
+/*
 // in : rids, n (length)
 // out: chids, lits
 void produce_chunk_id_literals(vector<uint32_t>& rids,
@@ -340,7 +340,7 @@ public:
   string filename = "";
   val bound = 0;
   int loops = 1;
-  string device_name = "GeForce GTX 780M";
+  string device_name = "GeForce GT 650M";
   bool print_results;
   config() {
     load<opencl::manager>();
@@ -403,9 +403,8 @@ void caf_main(actor_system& system, const config& cfg) {
   vec rids(input.size());
   vec chids(input.size());
   vec lits(input.size());
-  std::sort(begin(input), end(input));
-  /*
   sort_rids_by_value(input, rids);
+  /*
   produce_chunk_id_literals(rids, chids, lits);
   auto k_test = merged_lit_by_val_chids(input, chids, lits);
   vec chids_produce{chids};
@@ -452,9 +451,9 @@ void caf_main(actor_system& system, const config& cfg) {
   // TODO: Optimized runs with regard to cardinality
   uint32_t l_val = 4; // bits used as a bucket in each radix iteration
   uint32_t radices = 1 << l_val;
-  uint32_t blocks = 8; //min(dev.get_max_compute_units(), radices);
-  uint32_t threads_per_block = 512; //dev.get_max_work_group_size();
-  uint32_t threads_per_group = 8; //threads_per_block / radices;
+  uint32_t blocks = min(dev.get_max_compute_units(), radices);
+  uint32_t threads_per_block = 128; //dev.get_max_work_group_size();
+  uint32_t threads_per_group = 16; //threads_per_block / radices;
   uint32_t groups_per_block = threads_per_block / threads_per_group;
   uint32_t mask = (1 << l_val) - 1;
   uint32_t radices_per_block = radices / blocks;
@@ -476,55 +475,6 @@ void caf_main(actor_system& system, const config& cfg) {
     threads_per_block,
     elements
   };
-//  auto print_counters = [&](mem_ref<val>& ref, const string& step, val offset) {
-//    auto expected = ref.data();
-//    auto data = *expected;
-//    stringstream oss;
-//    oss << "Counters (" << step << ", " << offset << "): " << endl;
-//    for (int i = 0; i < 10; ++i)
-//      oss << "----------";
-//    oss << endl;
-//    oss << "          ";
-//    for (uint32_t j = 0; j < blocks; j++)
-//      oss << "                                         "
-//          << "Block" << setw(3) << to_string(j);
-//    oss << endl;
-//    for (int i = 0; i < 10; ++i)
-//      oss << "----------";
-//    oss << endl;
-//    for (uint32_t i = 0; i < radices; i++) {
-//      oss << "                     " << "Radix" << setw(3) << i;
-//      for (uint32_t j = 0; j < blocks; j++) {
-//        oss << "     ";
-//        for (uint32_t k = 0; k < groups_per_block; k++) {
-//          oss << setw(6) << hex
-//              << data[i * blocks * groups_per_block + j * groups_per_block + k];
-//        }
-//      }
-//      oss << endl;
-//    }
-//    return oss.str();
-//  };
-//  auto print_prefixes = [&](mem_ref<val>& ref, const string& step, val offset) {
-//    auto expected = ref.data();
-//    auto data = *expected;
-//    stringstream oss;
-//    oss << "Prefixes (" << step << ", " << offset << "): " << endl;
-//    for (auto& e : data)
-//      oss << e << " ";
-//    oss << endl;
-//    return oss.str();
-//  };
-//  auto print_values = [&](mem_ref<val>& ref, const string& step, val offset) {
-//    auto expected = ref.data();
-//    auto data = *expected;
-//    stringstream oss;
-//    oss << "Values (" << step << ", " << offset << "): " << endl;
-//    for (auto& e : data)
-//      oss << e << " ";
-//    oss << endl;
-//    return oss.str();
-//  };
   size_t radix_global = threads_per_block * blocks;
   size_t radix_local = threads_per_block;
   auto radix_range = spawn_config{dim_vec{radix_global}, {},
@@ -563,21 +513,9 @@ void caf_main(actor_system& system, const config& cfg) {
     auto radix_sum = mngr.spawn_phase<vec,vec,vec,vec,radix_config,
                                       val>(prog_radix, "scan", radix_range);
     auto radix_move
-      = mngr.spawn_phase<vec,vec,vec,vec,vec,vec, // vec,vec,
-                         radix_config, val>(prog_radix, "reorder",
+      = mngr.spawn_phase<vec,vec,vec,vec,vec,vec, vec,vec,
+                         radix_config, val>(prog_radix, "reorder_kv",
                                             radix_range);
-    /*
-    auto radix_zero = mngr.spawn_phase<vec>(prog_radix, "zeroes", zero_range);
-    auto radix_count = mngr.spawn_phase<vec,vec,radix_config,
-                                        val>(prog_radix, "SetupAndCount",
-                                             radix_range);
-    auto radix_sum = mngr.spawn_phase<vec,vec,vec,vec,radix_config,
-                                      val>(prog_radix, "SumIt", radix_range);
-    auto radix_move
-      = mngr.spawn_phase<vec,vec,vec,vec,vec,vec, // vec,vec,
-                         radix_config, val>(prog_radix, "ReorderingKeysOnly",
-                                            radix_range);
-    */
 #ifdef SHOW_TIME_CONSUMPTION
     auto to = high_resolution_clock::now();
     auto from = high_resolution_clock::now();
@@ -629,15 +567,14 @@ void caf_main(actor_system& system, const config& cfg) {
       );
     }
     */
-//    stringstream debug;
     {
       // radix sort for values by key using inpt as keys and temp as values
       auto r_keys_in = inpt_ref;
       auto r_keys_out = chid_ref;
       auto r_values_in = temp_ref;
       auto r_values_out = lits_ref;
-      auto r_counters = dev.scratch_argument<val>(counters, buffer_type::output);
-      auto r_prefixes = dev.scratch_argument<val>(prefixes, buffer_type::output);
+      auto r_counters = dev.scratch_argument<val>(counters);
+      auto r_prefixes = dev.scratch_argument<val>(prefixes);
       auto r_local_a = dev.local_argument<val>(groups_per_block * blocks);
       auto r_local_b = dev.local_argument<val>(groups_per_block * radices);
       auto r_local_c = dev.local_argument<val>(radices);
@@ -654,26 +591,20 @@ void caf_main(actor_system& system, const config& cfg) {
         self->send(radix_count, r_keys_in, r_counters, r_conf, r_offset);
         self->receive([&](mem_ref<val>&, mem_ref<val>&, mem_ref<radix_config>&,
                           mem_ref<val>&) { });
-//        debug << print_prefixes(r_prefixes, "count", l_val * i);
-//        debug << print_counters(r_counters, "count", l_val * i);
         self->send(radix_sum, r_keys_in, r_counters, r_prefixes, r_local_a,
                               r_conf, r_offset);
         self->receive([&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
                           mem_ref<val>&,
                           mem_ref<radix_config>&, mem_ref<val>&) { });
-//        debug << print_prefixes(r_prefixes, "sum", l_val * i);
-//        debug << print_counters(r_counters, "sum", l_val * i);
         self->send(radix_move, r_keys_in, r_keys_out,
-                               //r_values_in, r_values_out,
+                               r_values_in, r_values_out,
                                r_counters, r_prefixes,
                                r_local_b, r_local_c,
                                r_conf, r_offset);
         self->receive([&](mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
-                          mem_ref<val>&, //mem_ref<val>&, mem_ref<val>&,
+                          mem_ref<val>&, mem_ref<val>&, mem_ref<val>&,
                           mem_ref<val>&, mem_ref<val>&,
                           mem_ref<radix_config>&, mem_ref<val>&) { });
-//        debug << print_prefixes(r_prefixes, "reorder", l_val * i);
-//        debug << print_counters(r_counters, "reorder", l_val * i);
       }
       inpt_ref = r_keys_out;
       temp_ref = r_values_out;
@@ -688,37 +619,29 @@ void caf_main(actor_system& system, const config& cfg) {
 #endif
     auto inpt_exp = inpt_ref.data();
     auto rids_exp = temp_ref.data();
-    if (!inpt_exp || !rids_exp)
-      cout << "Something went wrong" << endl;
-    else {
+    if (!inpt_exp) {
+      cout << "Can't read keys back (" << system.render(inpt_exp.error())
+           << ")." << endl;
+    } else if (!rids_exp) {
+      cout << "Can't read values back (" << system.render(rids_exp.error())
+           << ")." << endl;
+    } else {
       auto inp = *inpt_exp;
       auto rid = *rids_exp;
-      vector<size_t> failed;
+      vector<size_t> failed_keys;
+      vector<size_t> failed_values;
       for (size_t i = 0; i < inp.size(); ++i) {
-        //cout << "[" << (inp[i] == input[i]) << "|"
-        //     << (rid[i] == rids[i]) << "] "
-        //     << setw(4) << inp[i] << ": "
-        //     << setw(4) << rid[i] << " =?= " << setw(4) << rids[i] << endl;
         if (inp[i] != input[i])
-          failed.push_back(i);
-        //  cout << "key mismatch at " << i
-        //       << " (" << inp[i] << " =!= " << input[i] << ")" << endl;
-        //if (rid[i] == rids[i])
-        //  cout << "val mismatch at " << i << endl;
+          failed_keys.push_back(i);
+        if (rid[i] != rids[i])
+          failed_values.push_back(i);
       }
-      if (failed.empty()) {
+      if (failed_keys.empty() && failed_values.empty())
         cout << "Success." << endl;
-//        cout << debug.str() << endl;
-      } else {
-        cout << "Failed for " << failed.size() << " values." << endl;
-//        if (failed.size() < 20) {
-//          cout << ">> ";
-//          for (auto f : failed)
-//            cout << f << " ";
-//          cout << endl;
-//        }
-//        cout << debug.str() << endl;
-      }
+      else
+        cout << "failed_keys for "
+             << failed_keys.size() << " keys and "
+             << failed_values.size() << " values." << endl;
     }
     return;
     self->send(chunks, temp_ref, chid_ref, lits_ref);

@@ -62,7 +62,8 @@ inline void prefix_sum(local uint* data, int len, int threads) {
   }
 }
 
-// Optimization: count in local memory and copy to global when the block is finished
+// Optimization: count in local memory and copy to global when the
+// block is finished.
 kernel void count(global uint* cell_in, global volatile uint* counters,
                   configuration conf, uint offset) {
   const uint thread = get_local_id(0);
@@ -236,6 +237,53 @@ kernel void reorder(global uint* cell_in, global uint* cell_out,
 
 kernel void reorder_kv(global uint* cell_in, global uint* cell_out,
                        global uint* value_in, global uint* value_out,
+                       global volatile uint* counters, global uint* prefixes,
+                       local uint* l_counters, local uint* l_prefixes,
+                       configuration conf, uint offset) {
+  const uint thread = get_local_id(0);
+  const uint block = get_group_id(0);
+  const uint group = thread / conf.tpg;
+  const uint radix = conf.rpb * block;
+  const uint entries = conf.gpb * conf.blocks;
+  const uint rc_offset = radix * entries;
+  // Finish phase 2 by combining the sum of each radix
+  for (uint i = thread; i < conf.radices; i += conf.tpb) {
+    l_prefixes[i] = prefixes[i];
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+  prefix_sum(l_prefixes, conf.radices, conf.tpb);
+  barrier(CLK_LOCAL_MEM_FENCE);
+  // Load (groups per block * radices) counters, i.e., the block column
+  for (uint i = 0; i < conf.gpb; ++i) {
+    if (thread < conf.radices) {
+      l_counters[thread * conf.gpb + i]
+        = counters[thread * entries + block * conf.gpb + i] + l_prefixes[thread];
+    }
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+  const uint group_offset = block * conf.gpb;
+  const uint group_thread = thread % conf.tpg;
+  const uint elem_offset = (group_offset + group) * conf.epg;
+  const uint start = elem_offset + group_thread;
+  const uint end = min(elem_offset + conf.epg, conf.size);
+  for (uint i = start; i < end; i += conf.tpg) {
+    const uint bits = (cell_in[i] >> offset) & conf.mask;
+    //const uint index = (bits * entries) + group_offset + group;
+    const uint index = (bits * conf.gpb) + group;
+    for (uint j = 0; j < conf.tpg; ++j) {
+      if (group_thread == j) {
+        cell_out[l_counters[index]] = cell_in[i];
+        value_out[l_counters[index]] = value_in[i];
+        ++l_counters[index];
+      }
+      barrier(CLK_LOCAL_MEM_FENCE);
+    }
+  }
+}
+
+/*
+kernel void reorder_kv(global uint* cell_in, global uint* cell_out,
+                       global uint* value_in, global uint* value_out,
                        global uint* counters, global uint* prefixes,
                        local uint* l_counters, local uint* l_prefixes,
                        configuration conf, uint offset) {
@@ -295,3 +343,4 @@ kernel void reorder_kv(global uint* cell_in, global uint* cell_out,
     }
   }
 }
+*/
