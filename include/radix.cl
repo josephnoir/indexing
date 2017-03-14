@@ -160,7 +160,6 @@ kernel void reorder(global uint* cell_in, global uint* cell_out,
   const uint end = min(elem_offset + conf.epg, conf.size);
   for (uint i = start; i < end; i += conf.tpg) {
     const uint bits = (cell_in[i] >> offset) & conf.mask;
-    //const uint index = (bits * entries) + group_offset + group;
     const uint index = (bits * conf.gpb) + group;
     for (uint j = 0; j < conf.tpg; ++j) {
       if (group_thread == j) {
@@ -171,69 +170,6 @@ kernel void reorder(global uint* cell_in, global uint* cell_out,
     }
   }
 }
-
-/*
-kernel void reorder(global uint* cell_in, global uint* cell_out,
-                    global volatile uint* counters, global uint* prefixes,
-                    local uint* l_counters, local uint* l_prefixes,
-                    configuration conf, uint offset) {
-  const uint thread = get_local_id(0);
-  const uint block = get_group_id(0);
-  const uint group = thread / conf.tpg;
-  const uint radix = conf.rpb * block;
-  const uint entries = conf.gpb * conf.blocks;
-  const uint rc_offset = radix * entries;
-  // Final step of sum operation
-  for (uint i = 0 ; i < conf.rpb ; ++i) {
-    for (uint j = thread; j < entries; j += conf.tpb) {
-      l_counters[i * entries + j] = counters[i * entries + rc_offset + j];
-    }
-  }
-  // Read radix prefixes to localMemory
-  for (uint i = thread; i < conf.radices; i += conf.tpb)
-    l_prefixes[i] = prefixes[i];
-  // prefix sum on the prefixes in local memory
-  barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE);
-  prefix_sum(l_prefixes, conf.radices, conf.tpb);
-  barrier(CLK_LOCAL_MEM_FENCE);
-  // add prefix sum to the subcounters
-  for (uint i = 0; i < conf.rpb; ++i) {
-    for (uint j = thread; j < entries; j += conf.tpb) {
-      atomic_add(&l_counters[i * entries + j], l_prefixes[radix + i]);
-      //l_counters[i * entries + j] += l_prefixes[radix + i];
-      //barrier(CLK_LOCAL_MEM_FENCE);
-    }
-  }
-  barrier(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE);
-  // Write back radices at the calculated offsets
-  for (uint i = 0; i < conf.rpb; ++i) {
-    for (uint j = thread; j < entries; j += conf.tpb) {
-      counters[i * entries + rc_offset + j] = l_counters[i * entries + j];
-    }
-  }
-  barrier(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
-  const uint group_offset = block * conf.gpb;
-  const uint group_thread = thread % conf.tpg;
-  const uint elem_offset = (group_offset + group) * conf.epg;
-  const uint start = elem_offset + group_thread;
-  const uint end = min(elem_offset + conf.epg, conf.size);
-  for (uint i = start; i < end; i += conf.tpg) {
-    const uint bits = (cell_in[i] >> offset) & conf.mask;
-    const uint index = (bits * entries) + group_offset + group;
-    //const uint old = atomic_inc(&counters[index]);
-    //cell_out[old] = cell_in[i];
-    //barrier(CLK_GLOBAL_MEM_FENCE);
-    for (uint j = 0; j < conf.tpg; ++j) {
-      if (group_thread == j) {
-        ++counters[index];
-        cell_out[counters[index] - 1] = cell_in[i];
-        //atomic_inc(&counters[index]);
-      }
-      barrier(CLK_GLOBAL_MEM_FENCE);
-    }
-  }
-}
-*/
 
 kernel void reorder_kv(global uint* cell_in, global uint* cell_out,
                        global uint* value_in, global uint* value_out,
@@ -268,7 +204,6 @@ kernel void reorder_kv(global uint* cell_in, global uint* cell_out,
   const uint end = min(elem_offset + conf.epg, conf.size);
   for (uint i = start; i < end; i += conf.tpg) {
     const uint bits = (cell_in[i] >> offset) & conf.mask;
-    //const uint index = (bits * entries) + group_offset + group;
     const uint index = (bits * conf.gpb) + group;
     for (uint j = 0; j < conf.tpg; ++j) {
       if (group_thread == j) {
@@ -281,66 +216,3 @@ kernel void reorder_kv(global uint* cell_in, global uint* cell_out,
   }
 }
 
-/*
-kernel void reorder_kv(global uint* cell_in, global uint* cell_out,
-                       global uint* value_in, global uint* value_out,
-                       global uint* counters, global uint* prefixes,
-                       local uint* l_counters, local uint* l_prefixes,
-                       configuration conf, uint offset) {
-  const uint thread = get_local_id(0);
-  const uint block = get_group_id(0);
-  const uint group = thread / conf.tpg;
-  const uint radix = conf.rpb * block;
-  const uint entries = conf.gpb * conf.blocks;
-  const uint rc_offset = radix * entries;
-  // Finish the radix sum
-  for (uint i = 0 ; i < conf.rpb ; i++) {
-    for (uint j = thread; j < entries; j += conf.tpb) {
-      l_counters[i * entries + j] = counters[rc_offset + i * entries + j];
-    }
-  }
-  // Read radix prefixes to localMemory
-  for (uint i = thread; i < conf.radices; i+= conf.tpb) {
-    l_prefixes[i] = prefixes[i];
-  }
-  // build prefix sum over radix counters?
-  // (seems to be the prefixes, not counters)
-  barrier(CLK_GLOBAL_MEM_FENCE);
-  prefix_sum(l_prefixes, conf.radices, conf.tpb);
-  barrier(CLK_GLOBAL_MEM_FENCE);
-  // Add the sum of the radix to all subounter of the radixes
-  for (uint i = 0; i < conf.rpb; i++) {
-    for (uint j = thread; j < entries; j += conf.tpb) {
-      l_counters[i * entries + j] += l_prefixes[radix + i];
-    }
-    // barrier(CLK_GLOBAL_MEM_FENCE);
-  }
-  // Write back the radixes to their respectve offers
-  for (uint i = 0; i < conf.rpb; i++) {
-    for (uint j = thread; j < entries; j += conf.tpb) {
-      // The entries counters of the radix are read from global memory to
-      // shared memory.
-      counters[rc_offset + i * entries + j] = l_counters[i * entries + j];
-    }
-  }
-  barrier(CLK_GLOBAL_MEM_FENCE);
-  const uint group_offset = block * conf.gpb;
-  const uint group_thread = thread % conf.tpg;
-  const uint elem_offset = (group_offset + group) * conf.epg;
-  const uint start = elem_offset + group_thread;
-  const uint end = min(elem_offset + conf.epg, conf.size);
-  for (uint i = start; i < end; i += conf.tpg) {
-    const uint bits = (cell_in[i] >> offset) & conf.mask;
-    const uint index = bits * entries + group_offset + group;
-    for (uint j = 0; j < conf.tpg; ++j) {
-      if (thread % conf.tpg == j) {
-        cell_out[counters[index]] = cell_in[i];
-        value_out[counters[index]] = value_in[i];
-        //atomic_inc(&counters[index]);
-        ++counters[index];
-      }
-      barrier(CLK_GLOBAL_MEM_FENCE);
-    }
-  }
-}
-*/

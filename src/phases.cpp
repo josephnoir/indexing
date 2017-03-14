@@ -451,9 +451,10 @@ void caf_main(actor_system& system, const config& cfg) {
   // TODO: Optimized runs with regard to cardinality
   uint32_t l_val = 4; // bits used as a bucket in each radix iteration
   uint32_t radices = 1 << l_val;
-  uint32_t blocks = min(dev.get_max_compute_units(), radices);
-  uint32_t threads_per_block = 128; //dev.get_max_work_group_size();
-  uint32_t threads_per_group = 16; //threads_per_block / radices;
+  uint32_t blocks
+    = (dev.get_max_compute_units() <= (radices / 2)) ? (radices / 2) : radices;
+  uint32_t threads_per_block = dev.get_max_work_group_size();
+  uint32_t threads_per_group = threads_per_block / radices;
   uint32_t groups_per_block = threads_per_block / threads_per_group;
   uint32_t mask = (1 << l_val) - 1;
   uint32_t radices_per_block = radices / blocks;
@@ -513,7 +514,7 @@ void caf_main(actor_system& system, const config& cfg) {
     auto radix_sum = mngr.spawn_phase<vec,vec,vec,vec,radix_config,
                                       val>(prog_radix, "scan", radix_range);
     auto radix_move
-      = mngr.spawn_phase<vec,vec,vec,vec,vec,vec, vec,vec,
+      = mngr.spawn_phase<vec,vec,vec,vec,vec,vec,vec,vec,
                          radix_config, val>(prog_radix, "reorder_kv",
                                             radix_range);
 #ifdef SHOW_TIME_CONSUMPTION
