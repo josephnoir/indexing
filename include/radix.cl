@@ -94,7 +94,7 @@ kernel void count(global uint* cell_in, global volatile uint* counters,
   }
 }
 
-kernel void scan(global uint* cell_in, global volatile uint* counters,
+kernel void scan(global uint* cell_in, global uint* counters,
                  global uint* prefixes, local uint* l_counters,
                  configuration conf, uint offset) {
   const uint thread = get_local_id(0);
@@ -129,7 +129,7 @@ kernel void scan(global uint* cell_in, global volatile uint* counters,
 
 
 kernel void reorder(global uint* cell_in, global uint* cell_out,
-                    global volatile uint* counters, global uint* prefixes,
+                    global uint* counters, global uint* prefixes,
                     local uint* l_counters, local uint* l_prefixes,
                     configuration conf, uint offset) {
   const uint thread = get_local_id(0);
@@ -173,7 +173,7 @@ kernel void reorder(global uint* cell_in, global uint* cell_out,
 
 kernel void reorder_kv(global uint* cell_in, global uint* cell_out,
                        global uint* value_in, global uint* value_out,
-                       global volatile uint* counters, global uint* prefixes,
+                       global uint* counters, global uint* prefixes,
                        local uint* l_counters, local uint* l_prefixes,
                        configuration conf, uint offset) {
   const uint thread = get_local_id(0);

@@ -144,6 +144,7 @@ string decoded_bitmap(const vec& bitmap) {
 
 // in : input
 // out: input, rids (both sorted by input)
+/*
 void sort_rids_by_value(vector<uint32_t>& input, vector<uint32_t>& rids) {
   assert(input.size() == rids.size());
   iota(begin(rids), end(rids), 0);
@@ -163,7 +164,6 @@ void sort_rids_by_value(vector<uint32_t>& input, vector<uint32_t>& rids) {
   }
 }
 
-/*
 // in : rids, n (length)
 // out: chids, lits
 void produce_chunk_id_literals(vector<uint32_t>& rids,
@@ -325,8 +325,8 @@ size_t compute_colum_length(vector<uint32_t>& input,
 }
 */
 
-
-val round_up(val numToRound, val multiple)  {
+template <class T, class E = typename enable_if<is_integral<T>::value>::type>
+T round_up(T numToRound, T multiple)  {
   assert(multiple > 0);
   return ((numToRound + multiple - 1) / multiple) * multiple;
 }
@@ -362,17 +362,15 @@ public:
 void caf_main(actor_system& system, const config& cfg) {
   vec values;
   if (cfg.filename.empty()) {
-    values = {10,  7, 22,  6,  7,  1,  9, 42,  2,  5,
-              13,  3,  2,  1,  0,  1, 18, 18,  3, 13,
-               5,  9,  0,  3,  2, 19,  5, 23, 22, 10,
-               6, 22};
-  } else {
-    //cout << "Reading data from '" << cfg.filename << "' ... " << flush;
-    ifstream source{cfg.filename, std::ios::in};
-    val next;
-    while (source >> next) {
-      values.push_back(next);
-    }
+    cout << "A filename with test data is required, see --help for detailts."
+         << endl;
+    return;
+  }
+  //cout << "Reading data from '" << cfg.filename << "' ... " << flush;
+  ifstream source{cfg.filename, std::ios::in};
+  val next;
+  while (source >> next) {
+    values.push_back(next);
   }
   //cout << "values: " << values.size() << endl;
   auto bound = cfg.bound;
@@ -399,12 +397,12 @@ void caf_main(actor_system& system, const config& cfg) {
   auto dev = *opt;
 
   // Create test data
+  /*
   auto input = values;
   vec rids(input.size());
   vec chids(input.size());
   vec lits(input.size());
   sort_rids_by_value(input, rids);
-  /*
   produce_chunk_id_literals(rids, chids, lits);
   auto k_test = merged_lit_by_val_chids(input, chids, lits);
   vec chids_produce{chids};
@@ -433,7 +431,7 @@ void caf_main(actor_system& system, const config& cfg) {
   // create spawn configuration
   auto n = values.size();
   auto index_space = spawn_config{dim_vec{n}};
-  auto wi = round_up(n, 128);
+  auto wi = round_up(n, 128ul);
   auto index_space_128  = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
 
   // buffers we alread know we need
@@ -449,11 +447,13 @@ void caf_main(actor_system& system, const config& cfg) {
   // - threads map to work items, but ids are counted inside a block
   // - groups separate threads of a block into multiple bundles
   // TODO: Optimized runs with regard to cardinality
+  uint32_t cardinality = 16;
   uint32_t l_val = 4; // bits used as a bucket in each radix iteration
   uint32_t radices = 1 << l_val;
   uint32_t blocks
     = (dev.get_max_compute_units() <= (radices / 2)) ? (radices / 2) : radices;
-  uint32_t threads_per_block = dev.get_max_work_group_size();
+  uint32_t threads_per_block
+    = max(radices, static_cast<uint32_t>(dev.get_max_work_group_size()));
   uint32_t threads_per_group = threads_per_block / radices;
   uint32_t groups_per_block = threads_per_block / threads_per_group;
   uint32_t mask = (1 << l_val) - 1;
@@ -580,7 +580,7 @@ void caf_main(actor_system& system, const config& cfg) {
       auto r_local_b = dev.local_argument<val>(groups_per_block * radices);
       auto r_local_c = dev.local_argument<val>(radices);
       auto r_conf = dev.private_argument(rc);
-      uint32_t iterations = sizeof(val) * 8 / l_val;
+      uint32_t iterations = cardinality / l_val;
       for (uint32_t i = 0; i < iterations; ++i) {
         auto r_offset = dev.private_argument(static_cast<val>(l_val * i));
         self->send(radix_zero, r_counters);
@@ -615,9 +615,10 @@ void caf_main(actor_system& system, const config& cfg) {
     //cout << "DONE: sort_rids_by_value" << endl;
 #ifdef SHOW_TIME_CONSUMPTION
     to = high_resolution_clock::now();
-    //cout << duration_cast<microseconds>(to - from).count() << " us" << endl;
+    cout << duration_cast<microseconds>(to - from).count() << " us" << endl;
     from = high_resolution_clock::now();
 #endif
+    /*
     auto inpt_exp = inpt_ref.data();
     auto rids_exp = temp_ref.data();
     if (!inpt_exp) {
@@ -645,6 +646,7 @@ void caf_main(actor_system& system, const config& cfg) {
              << failed_values.size() << " values." << endl;
     }
     return;
+    */
     self->send(chunks, temp_ref, chid_ref, lits_ref);
     self->receive(
       [&](mem_ref<val>&, mem_ref<val>& /*chid_r*/, mem_ref<val>& /*lit_r*/) {
@@ -809,8 +811,7 @@ void caf_main(actor_system& system, const config& cfg) {
     //valid_or_exit(idx_res, "Index preparation glitched.");
     // stream compaction using input ad valid
     // currently newly created actor to change NDRange
-    wi = round_up(2 * k, 128); //128 * (((2 * k) / 128) + (((2 * k) % 128) ? 1 : 0));
-    //auto wi = ((2 * k) + 128 - 1) & ~(128 - 1); // only for powers of 2
+    wi = round_up(2 * k, 128u);
     auto index_space_2k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
     sc_count = mngr.spawn_phase<vec,vec,vec,vec>(prog_sc, "countElts",
                                                  index_space_2k_128);
@@ -865,9 +866,7 @@ void caf_main(actor_system& system, const config& cfg) {
     auto col_scan = mngr.spawn_phase<vec,vec>(prog_colum,
                                               "lazy_segmented_scan",
                                               index_space_k);
-    //wi = ((k) + 128 - 1) & ~(128 - 1); // only for powers of 2
-    //wi = 128 * (((2 * k) / 128) + (((2 * k) % 128) ? 1 : 0));
-    wi = round_up(k, 128);
+    wi = round_up(k, 128u);
     auto index_space_k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
     sc_count = mngr.spawn_phase<vec,vec,vec,vec>(prog_sc, "countElts",
                                                  index_space_k_128);
