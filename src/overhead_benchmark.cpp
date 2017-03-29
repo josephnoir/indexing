@@ -33,8 +33,9 @@ namespace caf {
 
 namespace {
 
-using vec = std::vector<uint32_t>;
-using val = vec::value_type;
+using uval = uint32_t;
+using uvec = std::vector<uval>;
+using uref = mem_ref<uval>;
 
 using add_atom = atom_constant<atom("add")>;
 using init_atom = atom_constant<atom("init")>;
@@ -88,7 +89,7 @@ public:
   size_t iterations = 1000;
   size_t threshold = 1500;
   string filename = "";
-  val bound = 0;
+  uval bound = 0;
   string device_name = "";//"GeForce GTX 780M";
   bool print_results;
   config() {
@@ -135,14 +136,14 @@ void caf_main(actor_system& system, const config& cfg) {
   size_t n = 1;
   auto index_space_overhead = spawn_config{dim_vec{n}};
   // buffers for execution
-  vec config{static_cast<val>(n)};
+  uvec config{static_cast<uval>(n)};
   {
     // create phases
-    auto overhead = mngr.spawn_phase<uint*>(prog_overhead, "empty_kernel", index_space_overhead);
+    auto overhead = mngr.spawn_stage<uint*>(prog_overhead, "empty_kernel", index_space_overhead);
     // kernel executions
     // temp_ref used as rids buffer
     scoped_actor self{system};
-    auto conf_ref = dev.global_argument(config, buffer_type::input);
+    auto conf_ref = dev.global_argument(config);
 
     auto start = high_resolution_clock::now();
     auto stop = start;
@@ -150,7 +151,7 @@ void caf_main(actor_system& system, const config& cfg) {
     for(size_t i = 0; i < cfg.iterations; ++i) {
       start = high_resolution_clock::now();
       self->send(overhead, conf_ref);
-      self->receive([&](mem_ref<val>&) {
+      self->receive([&](uref&) {
         stop = high_resolution_clock::now();
       });
       measurements[i] = duration_cast<microseconds>(stop - start).count();
@@ -174,7 +175,7 @@ void caf_main(actor_system& system, const config& cfg) {
       cout << endl;
     cout << amount << " of " << cfg.iterations << " values were above " << threshold << endl;
     //auto stop = high_resolution_clock::now();
-    //TODO check if microseconds are good enough or if we should use nanoseconds instead
+    // TODO check if microseconds are good enough or if we should use nanoseconds instead
     /*
     cout << "Time: '"
          << duration_cast<microseconds>(stop - start).count()
