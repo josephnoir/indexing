@@ -35,7 +35,7 @@
 // prototypes
 uint sumReduce128(local uint* arr);
 uint compactSIMDPrefixSum(local const uint* dsData, local const uint* dsValid,
-                         local uint* dsCompact,    local uint* dsLocalIndex);
+                          local uint* dsCompact,    local uint* dsLocalIndex);
 uint exclusivePrescan128(local const uint* in, local uint* outAndTemp);
 
 
@@ -61,12 +61,10 @@ uint sumReduce128(local uint* arr) {
   return arr[0];
 }
 
-// len in config
-kernel void countElts(global uint* restrict config,
-                      global uint* restrict dgBlockCounts,
+kernel void countElts(global uint* restrict dgBlockCounts,
                       global uint* restrict dgValid,
-                      local  uint* restrict dsCount) {
-  const uint len = config[0];
+                      local  uint* restrict dsCount,
+                      private const uint len) {
   const uint idx  = get_local_id(0);
   const uint gidx = get_group_id(0);
   const uint ngrps = get_num_groups(0);
@@ -120,15 +118,15 @@ uint compactSIMDPrefixSum(local const uint* dsData, local const uint* dsValid,
 }
 
 // dgValid and dgData may be the same data if we want to keep eveything != 0
-kernel void moveValidElementsStaged(global       uint*          config,
+kernel void moveValidElementsStaged(global       uint*          result,
                                     global const uint*          dgData,
                                     global       uint* restrict dgCompact,
                                     global const uint*          dgValid,
                                     global const uint* restrict dgBlockCounts,
                                     local        uint* restrict inBlock,
                                     local        uint* restrict validBlock,
-                                    local        uint* restrict compactBlock) {
-  uint len = config[0];
+                                    local        uint* restrict compactBlock,
+                                    private const uint          len) {
   uint idx = get_local_id(0);
   uint gidx = get_group_id(0);
   uint ngrps = get_num_groups(0);
@@ -169,6 +167,6 @@ kernel void moveValidElementsStaged(global       uint*          config,
     blockOutOffset += numValidBlock;
   }
   if (gidx == (ngrps - 1) && idx == 0)
-    config[1] = blockOutOffset;
+    result[0] = blockOutOffset;
 }
 

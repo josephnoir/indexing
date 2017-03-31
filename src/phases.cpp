@@ -20,7 +20,11 @@
 #include "caf/opencl/mem_ref.hpp"
 #include "caf/opencl/actor_facade_phase.hpp"
 
+#define WITH_CPU_TESTS
 #define SHOW_TIME_CONSUMPTION
+#ifdef WITH_CPU_TESTS
+# undef SHOW_TIME_CONSUMPTION
+#endif // WITH_CPU_TESTS
 
 using namespace std;
 using namespace std::chrono;
@@ -72,6 +76,10 @@ namespace caf {
   template <>
   struct allowed_unsafe_message_type<mem_ref<radix_config>>
     : std::true_type {};
+  template <>
+  struct allowed_unsafe_message_type<opencl::dim_vec> : std::true_type {};
+  template <>
+  struct allowed_unsafe_message_type<spawn_config> : std::true_type {};
 }
 
 
@@ -148,9 +156,9 @@ string decoded_bitmap(const uvec& bitmap) {
         TESTS FUNCTIONS ON CPU FOR COMPARISON (TODO: DELTE THIS LATER)
 \*****************************************************************************/
 
+#ifdef WITH_CPU_TESTS
 // in : input
 // out: input, rids (both sorted by input)
-/*
 void sort_rids_by_value(vector<uint32_t>& input, vector<uint32_t>& rids) {
   assert(input.size() == rids.size());
   iota(begin(rids), end(rids), 0);
@@ -239,9 +247,10 @@ void produce_fills(vector<uint32_t>& input,
       new_chids[i] = chids[i] - chids[i - 1] - 1;
     } else {
       new_chids[i] = chids[i];
-      // This seems to result in the loss of fills
+      // Original code:
       //if (chids[i] != 0)
       //  new_chids[i] = chids[i] - 1;
+      // ... which seems to result in the loss of fills
     }
   }
   chids = std::move(new_chids);
@@ -329,7 +338,7 @@ size_t compute_colum_length(vector<uint32_t>& input,
   offsets = exclusive_scan(tmp);
   return keycnt;
 }
-*/
+#endif // WITH_CPU_TESTS
 
 template <class T, class E = typename enable_if<is_integral<T>::value>::type>
 T round_up(T numToRound, T multiple)  {
@@ -402,27 +411,28 @@ void caf_main(actor_system& system, const config& cfg) {
   }*/
   auto dev = *opt;
 
+#ifdef WITH_CPU_TESTS
   // Create test data
-  /*
-  auto input = values;
-  uvec rids(input.size());
-  uvec chids(input.size());
-  uvec lits(input.size());
-  sort_rids_by_value(input, rids);
-  produce_chunk_id_literals(rids, chids, lits);
-  auto k_test = merged_lit_by_val_chids(input, chids, lits);
-  uvec chids_produce{chids};
-  produce_fills(input, chids_produce, k_test);
-  uvec index(2 * k_test);
-  uvec chids_fuse{chids_produce};
-  auto index_length = fuse_fill_literals(chids_fuse, lits, index, k_test);
-  uvec offsets(k_test);
-  uvec input_col{input};
-  auto keycnt = compute_colum_length(input_col, chids_fuse, offsets, k_test);
+  auto test_input = values;
+  uvec test_rids(test_input.size());
+  uvec test_chids(test_input.size());
+  uvec test_lits(test_input.size());
+  sort_rids_by_value(test_input, test_rids);
+  produce_chunk_id_literals(test_rids, test_chids, test_lits);
+  auto test_k = merged_lit_by_val_chids(test_input, test_chids, test_lits);
+  uvec test_chids_produce{test_chids};
+  produce_fills(test_input, test_chids_produce, test_k);
+  uvec test_index(2 * test_k);
+  uvec test_chids_fuse{test_chids_produce};
+  auto test_index_length = fuse_fill_literals(test_chids_fuse, test_lits, test_index, test_k);
+  uvec test_offsets(test_k);
+  uvec test_input_col{test_input};
+  auto test_keycount = compute_colum_length(test_input_col, test_chids_fuse, test_offsets, test_k);
   cout << "Created test data." << endl;
-  cout << "Index has " << index_length << " elements with "
-       << keycnt << " keys." << endl;
-  */
+  cout << "Index has " << test_index_length << " elements with "
+       << test_keycount << " keys." << endl;
+#endif // WITH_CPU_TESTS
+
   // load kernels
   auto prog_rids   = mngr.create_program_from_file(kernel_file_01, "", dev);
   auto prog_chunks = mngr.create_program_from_file(kernel_file_02, "", dev);
@@ -434,18 +444,17 @@ void caf_main(actor_system& system, const config& cfg) {
   auto prog_es     = mngr.create_program_from_file(kernel_file_08, "", dev);
   auto prog_radix  = mngr.create_program_from_file(kernel_file_09, "", dev);
 
-  // create spawn configuration
+  // configuration parameters
   auto n = values.size();
-  auto index_space = spawn_config{dim_vec{n}};
+  auto ndrange = spawn_config{dim_vec{n}};
   auto wi = round_up(n, 128ul);
-  auto index_space_128  = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
-
-  // buffers we alread know we need
-  uvec config{static_cast<uval>(n)};
-  auto inpt_ref = dev.global_argument(values);
-  auto chid_ref = dev.scratch_argument<uval>(n, buffer_type::output);
-  auto lits_ref = dev.scratch_argument<uval>(n, buffer_type::output);
-  auto temp_ref = dev.scratch_argument<uval>(n, buffer_type::output);
+  auto ndrange_128  = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
+  // TODO: not a nice solution, need some better appraoch
+  auto wi_two = [&](uvec&, uref&) { return size_t{wi / 128}; };
+  auto k_once = [](uref&, uref&, uref&, uval k) { return size_t{k}; };
+  auto one = [](uref&, uref&, uref&, uval) { return size_t{1}; };
+  auto k_double = [](uref&, uref&, uval k) { return size_t{2 * k}; };
+  auto k_two = [](uref&, uval k) { return size_t{k}; };
 
   // sort configuration
   // thread block has multiple thread groups has multiple threads
@@ -490,143 +499,141 @@ void caf_main(actor_system& system, const config& cfg) {
   {
     auto start = high_resolution_clock::now();
     // create phases
-    auto rids_1 = mngr.spawn_stage<uvec, uvec, uvec>(prog_rids, "create_rids",
-                                                  index_space);
-    auto chunks = mngr.spawn_stage<uvec, uvec, uvec>(prog_chunks,
-                                                  "produce_chunks",
-                                                  index_space);
-    auto merge_heads = mngr.spawn_stage<uvec, uvec, uvec>(prog_merge,
-                                                       "create_heads",
-                                                       index_space);
-    auto merge_scan = mngr.spawn_stage<uvec,uvec>(prog_merge,
-                                                "lazy_segmented_scan",
-                                                index_space);
-    auto sc_count = mngr.spawn_stage<uvec,uvec,uvec,uvec>(prog_sc,
-                                                      "countElts",
-                                                      index_space_128);
-    auto sc_move = mngr.spawn_stage<uvec,uvec,uvec,uvec,
-                                    uvec,uvec,uvec,uvec>(prog_sc,
-                                                     "moveValidElementsStaged",
-                                                     index_space_128);
-    auto fills = mngr.spawn_stage<uvec,uvec,uvec,uvec>(prog_fills,
-                                                   "produce_fills",
-                                                   index_space);
-    auto fuse_prep = mngr.spawn_stage<uvec,uvec,uvec,uvec>(prog_fuse,
-                                                       "prepare_index",
-                                                       index_space);
-    auto radix_zero = mngr.spawn_stage<uvec>(prog_radix, "zeroes", zero_range);
-    auto radix_count = mngr.spawn_stage<uvec,uvec,radix_config,
-                                        uval>(prog_radix, "count", radix_range);
-    auto radix_sum = mngr.spawn_stage<uvec,uvec,uvec,uvec,radix_config,
-                                      uval>(prog_radix, "scan", radix_range);
-    auto radix_move
-      = mngr.spawn_stage<uvec,uvec,uvec,uvec,uvec,uvec,uvec,uvec,
-                         radix_config, uval>(prog_radix, "reorder_kv",
-                                            radix_range);
+    // sort rids ...
+    auto rids_1 = mngr.spawn_new(prog_rids, "create_rids", ndrange,
+                                 in_out<uval,val,mref>{}, out<uval,mref>{},
+                                 priv<uval>{static_cast<uval>(n)});
+    // radix sort (by key)
+    auto radix_zero = mngr.spawn_new(prog_radix, "zeroes", zero_range,
+                                     in_out<uval,mref,mref>{});
+    auto radix_count = mngr.spawn_new(prog_radix, "count", radix_range,
+                                      in_out<uval,mref,mref>{},
+                                      in_out<uval,mref,mref>{},
+                                      priv<radix_config>{rc}, priv<uval,val>{});
+    auto radix_scan = mngr.spawn_new(prog_radix, "scan", radix_range,
+                                     in_out<uval,mref,mref>{},
+                                     in_out<uval,mref,mref>{},
+                                     in_out<uval,mref,mref>{},
+                                     local<uval>{groups_per_block * blocks},
+                                     priv<radix_config>{rc},
+                                     priv<uval,val>{});
+    auto radix_move = mngr.spawn_new(prog_radix, "reorder_kv", radix_range,
+                                     in_out<uval,mref,mref>{},
+                                     in_out<uval,mref,mref>{},
+                                     in_out<uval,mref,mref>{},
+                                     in_out<uval,mref,mref>{},
+                                     in_out<uval,mref,mref>{},
+                                     in_out<uval,mref,mref>{},
+                                     local<uval>{groups_per_block * radices},
+                                     local<uval>{radices},
+                                     priv<radix_config>{rc},
+                                     priv<uval,val>{});
+    // produce chuncks ...
+    auto chunks = mngr.spawn_new(prog_chunks, "produce_chunks", ndrange,
+                                 in_out<uval,mref,mref>{},
+                                 out<uval,mref>{}, out<uval,mref>{});
+    // <uvec, uvec, uvec>
+    auto merge_heads = mngr.spawn_new(prog_merge, "create_heads", ndrange,
+                                      in_out<uval,mref,mref>{},
+                                      in_out<uval,mref,mref>{},
+                                      out<uval,mref>{});
+    auto merge_scan = mngr.spawn_new(prog_merge, "lazy_segmented_scan",
+                                     ndrange, in<uval,mref>{},
+                                     in_out<uval,mref,mref>{});
+    // stream compaction
+    auto sc_count = mngr.spawn_new(prog_sc,"countElts", ndrange_128,
+                                   out<uval,mref>{wi_two},
+                                   in_out<uval,mref,mref>{},
+                                   local<uval>{128},
+                                   priv<uval,val>{});
+    auto sc_move = mngr.spawn_new(prog_sc, "moveValidElementsStaged",
+                                  ndrange_128,
+                                  out<uval,val>{one},
+                                  in_out<uval,mref,mref>{},
+                                  out<uval,mref>{k_once},
+                                  in_out<uval,mref,mref>{},
+                                  in_out<uval,mref,mref>{},
+                                  local<uval>{128},
+                                  local<uval>{128},
+                                  local<uval>{128},
+                                  priv<uval,val>{});
+    // produce fills
+    auto fills = mngr.spawn_new(prog_fills, "produce_fills", ndrange,
+                                in<uval,mref>{},in<uval,mref>{},
+                                out<uval,mref>{},priv<uval,val>{});
+    // fuse fill & literals
+    auto fuse_prep = mngr.spawn_new(prog_fuse, "prepare_index", ndrange,
+                                    in<uval,mref>{},in<uval,mref>{},
+                                    out<uval,mref>{k_double},
+                                    priv<uval,val>{});
+    // compute column length
+    auto col_prep = mngr.spawn_new(prog_colum, "colum_prepare", ndrange,
+                                   in_out<uval,mref,mref>{}, out<uval,mref>{},
+                                   in_out<uval,mref,mref>{}, out<uval,mref>{});
+    auto col_scan = mngr.spawn_new(prog_colum, "lazy_segmented_scan", ndrange,
+                                   in_out<uval,mref,mref>{},
+                                   in_out<uval,mref,mref>{});
+    // scan
+    auto lazy_scan = mngr.spawn_new(prog_es, "lazy_scan",
+                                    spawn_config{dim_vec{1}},
+                                    in<uval,mref>{},
+                                    out<uval,mref>{k_two},
+                                    priv<uval,val>{});
 #ifdef SHOW_TIME_CONSUMPTION
     auto to = high_resolution_clock::now();
     auto from = high_resolution_clock::now();
 #endif
 
     // kernel executions
-    // temp_ref used as rids buffer
+    // rids_r used as rids buffer
     scoped_actor self{system};
-    auto conf_ref = dev.global_argument(config);
-    self->send(rids_1, conf_ref, inpt_ref, temp_ref);
-    self->receive(
-      [&](uref&, uref&, uref&) {
-        // nop
-      }
-    );
-    /*
-    // chids and lit only used as temporary buffers
-    self->send(rids_3, inpt_ref, temp_ref, chid_ref, lits_ref);
-    self->receive(
-      [&](uref&, uref&, uref&, uref&) {
-        // nop
-      }
-    );
-    inpt_ref = chid_ref;
-    temp_ref = lits_ref;
-    chid_ref = dev.scratch_argument<uval>(n, buffer_type::output);
-    lits_ref = dev.scratch_argument<uval>(n, buffer_type::output);
-    */
-    /*
-    for (val length = 1; length < values.size(); length <<= 1) {
-      int inc = length;
-      bool done = false;
-      config.resize(2);
-      config[0] = inc;
-      config[1] = length << 1;
-      conf_ref = dev.global_argument(config, buffer_type::input);
-      self->send(rids_2, conf_ref, inpt_ref, temp_ref);
-      self->receive_while([&] { return !done; })(
-        [&](uref& conf, uref& vals, uref& rids) {
-          inc >>= 1;
-          if (inc > 0) {
-            config[0] = inc;
-            conf = dev.global_argument(config, buffer_type::input);
-            self->send(rids_2, conf, vals, rids);
-          } else {
-            done = true;
-          }
-        }
-      );
-    }
-    */
+    self->send(rids_1, values);
+    uref input_r;
+    uref rids_r;
+    self->receive([&](uref& in, uref& rids) {
+      input_r = move(in);
+      rids_r = move(rids);
+    });
     {
       // radix sort for values by key using inpt as keys and temp as values
-      auto r_keys_in = inpt_ref;
-      auto r_keys_out = chid_ref;
-      auto r_values_in = temp_ref;
-      auto r_values_out = lits_ref;
+      auto r_keys_in = input_r;
+      auto r_keys_out = dev.scratch_argument<uval>(n, buffer_type::input_output);
+      auto r_values_in = rids_r;
+      auto r_values_out = dev.scratch_argument<uval>(n, buffer_type::input_output);
+      // TODO: see how performance is affected if we create new arrays each time
       auto r_counters = dev.scratch_argument<uval>(counters);
       auto r_prefixes = dev.scratch_argument<uval>(prefixes);
-      auto r_local_a = dev.local_argument<uval>(groups_per_block * blocks);
-      auto r_local_b = dev.local_argument<uval>(groups_per_block * radices);
-      auto r_local_c = dev.local_argument<uval>(radices);
-      auto r_conf = dev.private_argument(rc);
       uint32_t iterations = cardinality / l_val;
       for (uint32_t i = 0; i < iterations; ++i) {
-        auto r_offset = dev.private_argument(static_cast<uval>(l_val * i));
+        uval offset = l_val * i;
         self->send(radix_zero, r_counters);
-        self->receive([&](uref&) { });
         if (i > 0) {
           std::swap(r_keys_in, r_keys_out);
           std::swap(r_values_in, r_values_out);
         }
-        self->send(radix_count, r_keys_in, r_counters, r_conf, r_offset);
-        self->receive([&](uref&, uref&, mem_ref<radix_config>&,
-                          uref&) { });
-        self->send(radix_sum, r_keys_in, r_counters, r_prefixes, r_local_a,
-                              r_conf, r_offset);
-        self->receive([&](uref&, uref&, uref&,
-                          uref&,
-                          mem_ref<radix_config>&, uref&) { });
-        self->send(radix_move, r_keys_in, r_keys_out,
-                               r_values_in, r_values_out,
-                               r_counters, r_prefixes,
-                               r_local_b, r_local_c,
-                               r_conf, r_offset);
-        self->receive([&](uref&, uref&, uref&,
-                          uref&, uref&, uref&,
-                          uref&, uref&,
-                          mem_ref<radix_config>&, uref&) { });
+        self->receive([&](uref&) { });
+        self->send(radix_count, r_keys_in, r_counters, offset);
+        self->receive([&](uref&, uref&) { });
+        self->send(radix_scan, r_keys_in, r_counters, r_prefixes, offset);
+        self->receive([&](uref&, uref&, uref&) { });
+        self->send(radix_move, r_keys_in, r_keys_out, r_values_in, r_values_out,
+                               r_counters, r_prefixes, offset);
+        self->receive([&](uref&, uref&, uref&, uref&, uref&, uref&) { });
       }
-      inpt_ref = r_keys_out;
-      temp_ref = r_values_out;
-      chid_ref = dev.scratch_argument<uval>(n, buffer_type::output);
-      lits_ref = dev.scratch_argument<uval>(n, buffer_type::output);
+      input_r = r_keys_out;
+      rids_r = r_values_out;
     }
     //cout << "DONE: sort_rids_by_value" << endl;
+
 #ifdef SHOW_TIME_CONSUMPTION
     to = high_resolution_clock::now();
     cout << duration_cast<microseconds>(to - from).count() << " us" << endl;
     from = high_resolution_clock::now();
 #endif
-    /*
-    auto inpt_exp = inpt_ref.data();
-    auto rids_exp = temp_ref.data();
+
+#ifdef WITH_CPU_TESTS
+    auto inpt_exp = input_r.data();
+    auto rids_exp = rids_r.data();
     if (!inpt_exp) {
       cout << "Can't read keys back (" << system.render(inpt_exp.error())
            << ")." << endl;
@@ -639,373 +646,244 @@ void caf_main(actor_system& system, const config& cfg) {
       vector<size_t> failed_keys;
       vector<size_t> failed_values;
       for (size_t i = 0; i < inp.size(); ++i) {
-        if (inp[i] != input[i])
+        if (inp[i] != test_input[i])
           failed_keys.push_back(i);
-        if (rid[i] != rids[i])
+        if (rid[i] != test_rids[i])
           failed_values.push_back(i);
       }
-      if (failed_keys.empty() && failed_values.empty())
-        cout << "Success." << endl;
-      else
+      if (!failed_keys.empty() || !failed_values.empty()) {
         cout << "failed_keys for "
              << failed_keys.size() << " keys and "
              << failed_values.size() << " values." << endl;
+        return;
+      }
     }
-    return;
-    */
-    self->send(chunks, temp_ref, chid_ref, lits_ref);
-    self->receive(
-      [&](uref&, uref& /*chid_r*/, uref& /*lit_r*/) {
-        /*
-        cout << "DONE: produce_chunk_id_literals" << endl;
-        auto in_exp = inpt_ref.data();
-        auto ch_exp = chid_r.data();
-        auto li_exp = lit_r.data();
-        valid_or_exit(in_exp);
-        valid_or_exit(ch_exp);
-        valid_or_exit(li_exp);
-        auto in = *in_exp;
-        auto ch = *ch_exp;
-        auto li = *li_exp;
-        cout << "Input equal: " << (in == input) << endl;
-        cout << "Chids equal: " << (ch == chids) << endl;
-        cout << "Lits  equal: " << (li == lits) << endl;
-        */
-      }
-    );
+#endif // WITH_CPU_TESTS
+
+    self->send(chunks, rids_r);
+    uref chids_r;
+    uref lits_r;
+    self->receive([&](uref& /*rids*/, uref& chids, uref& lits) {
+      chids_r = chids;
+      lits_r = lits;
+    });
+
+#ifdef WITH_CPU_TESTS
+      cout << "DONE: produce_chunk_id_literals" << endl;
+      auto in_exp = input_r.data();
+      auto ch_exp = chids_r.data();
+      auto li_exp = lits_r.data();
+      valid_or_exit(in_exp);
+      valid_or_exit(ch_exp);
+      valid_or_exit(li_exp);
+      auto in = *in_exp;
+      auto ch = *ch_exp;
+      auto li = *li_exp;
+      cout << "Input equal: " << (in == test_input) << endl;
+      cout << "Chids equal: " << (ch == test_chids) << endl;
+      cout << "Lits  equal: " << (li == test_lits) << endl;
+#endif // WITH_CPU_TESTS
+
 #ifdef SHOW_TIME_CONSUMPTION
     to = high_resolution_clock::now();
     cout << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
-    // use temp as heads array
-    self->send(merge_heads, inpt_ref, chid_ref, temp_ref);
-    self->receive(
-      [&](mem_ref<uval>&, mem_ref<uval>&, mem_ref<uval>&) {
-       // cout << "Created heads array" << endl;
-      }
-    );
-    self->send(merge_scan, temp_ref, lits_ref);
-    self->receive(
-      [&](mem_ref<uval>&, mem_ref<uval>&) {
-        //cout << "Merged values" << endl;
-        /*
-        auto res1 = heads.data();
-        auto res2 = lits.data();
-        if (!res1 || !res2) {
-          cout << "Something went wrong!" << endl;
-        } else {
-          for (size_t i = 0; i < res1->size(); ++i) {
-            cout << as_binary(res1->at(i)) << " : "
-                 << as_binary(res2->at(i)) << endl;
-          }
-        }
-        */
-      }
-    );
+
+    uref heads_r;
+    uval k = 0;
+    self->send(merge_heads, input_r, chids_r);
+    self->receive([&](uref&, uref&, uref& heads) {
+      heads_r = heads;
+    });
+    // cout << "Created heads array" << endl;
+    self->send(merge_scan, heads_r, lits_r);
+    self->receive([&](uref&) { });
+    // cout << "Merged values" << endl;
     // stream compact inpt, chid, lits by heads value
-    config.resize(2);
-    config[0] = static_cast<uval>(n);
-    config[1] = 0;
-    conf_ref = dev.global_argument(config, buffer_type::input_output);
-    auto blocks_size = wi / 128; // dev.get_max_compute_units();
-    auto blocks_ref = dev.scratch_argument<uval>(blocks_size,
-                                                 buffer_type::output);
-    auto b128_ref = dev.local_argument<uval>(128);
-    self->send(sc_count, conf_ref, blocks_ref, temp_ref, b128_ref);
-    self->receive(
-      [&](mem_ref<uval>&, mem_ref<uval>&, mem_ref<uval>&, mem_ref<uval>&) {
-        //cout << "Count step done." << endl;
-      }
-    );
-    auto out_ref = dev.scratch_argument<uval>(n, buffer_type::output);
-    self->send(sc_move, conf_ref,   inpt_ref, out_ref,  temp_ref,
-                        blocks_ref, b128_ref, b128_ref, b128_ref);
-    self->receive(
-      [&](mem_ref<uval>&, mem_ref<uval>&, mem_ref<uval>&, mem_ref<uval>&,
-          mem_ref<uval>&, mem_ref<uval>&, mem_ref<uval>&, mem_ref<uval>&) {
-        //cout << "Merge step done (input)." << endl;
-      }
-    );
-    inpt_ref.swap(out_ref);
-    self->send(sc_move, conf_ref, chid_ref, out_ref, temp_ref,
-                        blocks_ref, b128_ref, b128_ref, b128_ref);
-    self->receive(
-      [&](mem_ref<uval>&, mem_ref<uval>&, mem_ref<uval>&, mem_ref<uval>&,
-          mem_ref<uval>&, mem_ref<uval>&, mem_ref<uval>&, mem_ref<uval>&) {
-        //cout << "Merge step done (chids)." << endl;
-      }
-    );
-    chid_ref.swap(out_ref);
-    self->send(sc_move, conf_ref, lits_ref, out_ref, temp_ref,
-                        blocks_ref, b128_ref, b128_ref, b128_ref);
-    self->receive(
-      [&](uref&, uref&, uref&, uref&,
-          uref&, uref&, uref&, uref&) {
-        //cout << "Merge step done (lits)." << endl;
-      }
-    );
-    lits_ref.swap(out_ref);
+    uref blocks_r;
+    uval len = static_cast<uval>(n);
+    self->send(sc_count, heads_r, len);
+    self->receive([&](uref& blocks, uref&) {
+      blocks_r = blocks;
+    });
+    // cout << "Count step done." << endl;
+    // TODO: Can we do this concurrently?
+    self->send(sc_move, input_r, heads_r, blocks_r, len);
+    self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
+      k = res[0];
+      input_r.swap(out);
+    });
+    //cout << "Merge step done (input)." << endl;
+    self->send(sc_move, chids_r, heads_r, blocks_r, len);
+    self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
+      k = res[0];
+      chids_r.swap(out);
+    });
+    // cout << "Merge step done (chids)." << endl;
+    self->send(sc_move, lits_r, heads_r, blocks_r, len);
+    self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
+      k = res[0];
+      lits_r.swap(out);
+    });
+    
+    // cout << "Merge step done (lits)." << endl;
     // cout << "DONE: merge_lit_by_val_chids." << endl;
+
 #ifdef SHOW_TIME_CONSUMPTION
     to = high_resolution_clock::now();
     cout << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
-    auto res_conf = conf_ref.data();
-    /*
-    auto res_inpt = inpt_ref.data();
-    auto res_chid = chid_ref.data();
-    auto res_lits = lits_ref.data();
-    valid_or_exit(res_conf);
+
+#ifdef WITH_CPU_TESTS
+    valid_or_exit(k == test_k);
+    auto res_inpt = input_r.data();
+    auto res_chid = chids_r.data();
+    auto res_lits = lits_r.data();
     valid_or_exit(res_inpt);
     valid_or_exit(res_chid);
     valid_or_exit(res_lits);
-    */
-    auto k = res_conf->at(1);
-    /*
-    valid_or_exit(k == k_test);
     uvec new_inpt{*res_inpt};
     uvec new_chid{*res_chid};
     uvec new_lits{*res_lits};
     new_inpt.resize(k);
     new_chid.resize(k);
     new_lits.resize(k);
-    valid_or_exit(new_inpt == input, "input not equal");
-    valid_or_exit(new_chid == chids, "chids not equal");
-    valid_or_exit(new_lits == lits, "lits not equal");
-    */
-    // we should reconfigure the NDRange of fills-actor here to k
-    self->send(fills, conf_ref, inpt_ref, chid_ref, out_ref);
-    self->receive(
-      [&](uref&, uref&, uref&, uref& ) {
-        //cout << "DONE: produce fills." << endl;
-      }
-    );
+    valid_or_exit(new_inpt == test_input, "input not equal");
+    valid_or_exit(new_chid == test_chids, "chids not equal");
+    valid_or_exit(new_lits == test_lits, "lits not equal");
+#endif // WITH_CPU_TESTS
+
+
+    self->send(fills, spawn_config{dim_vec{k}}, input_r, chids_r, k);
+    self->receive([&](uref& out) { chids_r.swap(out); });
+    // cout << "DONE: produce fills." << endl;
+
 #ifdef SHOW_TIME_CONSUMPTION
     to = high_resolution_clock::now();
     cout << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
-    chid_ref.swap(out_ref);
-    /*
-    res_inpt = inpt_ref.data();
-    res_chid = chid_ref.data();
+
+#ifdef WITH_CPU_TESTS
+    res_inpt = input_r.data();
+    res_chid = chids_r.data();
     valid_or_exit(res_inpt, "destroyed input");
     valid_or_exit(res_chid, "can't read fills");
     new_inpt = *res_inpt;
     new_chid = *res_chid;
     new_inpt.resize(k);
     new_chid.resize(k);
-    valid_or_exit(new_inpt == input, "input not equal");
-    valid_or_exit(new_chid == chids_produce, "chids not equal");
-    */
-    config.resize(2);
-    config[0] = k;
-    config[1] = 0;
-    conf_ref = dev.global_argument(config);
-    // TODO: release buffers no longer needed
-    // we should reconfigure the NDRange of fuse_prep-actor here to k
-    auto idx_ref = dev.scratch_argument<uval>(2 * k, buffer_type::output);
-    self->send(fuse_prep, conf_ref, chid_ref, lits_ref, idx_ref);
-    self->receive(
-      [&](uref&, uref&, uref&, uref&) {
-        //cout << "Prepared index." << endl;
-      }
-    );
-    //auto idx_res = idx_ref.data();
-    //valid_or_exit(idx_res, "Index preparation glitched.");
-    // stream compaction using input ad valid
-    // currently newly created actor to change NDRange
+    valid_or_exit(new_inpt == test_input, "input not equal");
+    valid_or_exit(new_chid == test_chids_produce, "chids not equal");
+#endif // WITH_CPU_TESTS
+
+    uref index_r;
+    size_t index_length = 0;
+    self->send(fuse_prep, spawn_config{dim_vec{k}}, chids_r, lits_r, k);
+    self->receive([&](uref& index) { index_r = index; });
+    auto idx_e = index_r.data();
+    // cout << "Prepared index." << endl;
     wi = round_up(2 * k, 128u);
-    auto index_space_2k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
-    sc_count = mngr.spawn_stage<uvec,uvec,uvec,uvec>(prog_sc, "countElts",
-                                                 index_space_2k_128);
-    sc_move = mngr.spawn_stage<uvec,uvec,uvec,uvec,
-                               uvec,uvec,uvec,uvec>(prog_sc,
-                                                "moveValidElementsStaged",
-                                                index_space_2k_128);
-    blocks_size = wi / 128; // wgs;
-    blocks_ref = dev.scratch_argument<uval>(blocks_size, buffer_type::output);
-    config.resize(2);
-    config[0] = 2 * k;
-    config[1] = 0;
-    conf_ref = dev.global_argument(config);
-    self->send(sc_count, conf_ref, blocks_ref, idx_ref, b128_ref);
-    self->receive(
-      [&](uref&, uref&, uref&, uref&) {
-        //cout << "Count step done." << endl;
-      }
-    );
-    out_ref = dev.scratch_argument<uval>(2 * k, buffer_type::output);
-    self->send(sc_move, conf_ref,   idx_ref,  out_ref,  idx_ref,
-                        blocks_ref, b128_ref, b128_ref, b128_ref);
-    self->receive(
-      [&](uref&, uref&, uref&, uref&,
-          uref&, uref&, uref&, uref&) {
-        //cout << "Merge step done." << endl;
-      }
-    );
-    idx_ref.swap(out_ref);
+    auto ndrange_2k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
+    self->send(sc_count, ndrange_2k_128, index_r, 2 * k);
+    self->receive([&](uref& blocks, uref&) {
+      blocks_r = blocks;
+    });
+    self->send(sc_move, ndrange_2k_128, index_r, index_r, blocks_r, 2 * k);
+    self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
+      index_length = res[0];
+      index_r = out;
+      //cout << "Merge step done." << endl;
+    });
     //cout << "DONE: fuse_fill_literals." << endl;
+
 #ifdef SHOW_TIME_CONSUMPTION
     to = high_resolution_clock::now();
     cout << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
-    auto idx_conf = conf_ref.data();
-    //valid_or_exit(res_conf, "Can't read conf after stream compaction.");
-    auto conf = *idx_conf;
-    auto idx_len = conf[1];
-    //valid_or_exit(index_length == idx_len, "Lengths don't match");
- // cout << "Created index of length " << idx_len << "." << endl;
-    auto idx_idx = idx_ref.data(idx_len);
-    //valid_or_exit(idx_idx, "Can't read index after stream compaction.");
-    auto idx = *idx_idx;
+
+    auto index_opt = index_r.data(index_length);
+#ifdef WITH_CPU_TESTS
+    valid_or_exit(test_index_length == index_length, "Lengths don't match");
+    valid_or_exit(index_opt, "Can't read index after stream compaction.");
+#endif
+    auto index = *index_opt;
+
+#ifdef SHOW_TIME_CONSUMPTION
+    to = high_resolution_clock::now();
+    cout // << "Reading back index of length " << idx_len << " took "
+         << duration_cast<microseconds>(to - from).count()<< " us" << endl;
+    from = high_resolution_clock::now();
+#endif
+
     // next step: compute_colum_length
-    out_ref = dev.scratch_argument<uval>(k, buffer_type::output);
-    auto heads_ref = dev.scratch_argument<uval>(k, buffer_type::output);
-    auto index_space_k = spawn_config{dim_vec{k}};
-    auto col_prep = mngr.spawn_stage<uvec,uvec,uvec,uvec>(prog_colum,
-                                                      "colum_prepare",
-                                                      index_space_k);
-    auto col_scan = mngr.spawn_stage<uvec,uvec>(prog_colum,
-                                              "lazy_segmented_scan",
-                                              index_space_k);
-    wi = round_up(k, 128u);
-    auto index_space_k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
-    sc_count = mngr.spawn_stage<uvec,uvec,uvec,uvec>(prog_sc, "countElts",
-                                                 index_space_k_128);
-    sc_move = mngr.spawn_stage<uvec,uvec,uvec,uvec,
-                               uvec,uvec,uvec,uvec>(prog_sc,
-                                                "moveValidElementsStaged",
-                                                index_space_k_128);
+    auto ndrange_k = spawn_config{dim_vec{k}};
     // temp  -> the tmp array used by the algorithm
     // heads -> stores the heads array for the stream compaction
-    self->send(col_prep, chid_ref, temp_ref, inpt_ref, heads_ref);
-    self->receive(
-      [&](uref&, uref&, uref&, uref&) {
-        //cout << "Col: prepare done." << endl;
-      }
-    );
-    self->send(col_scan, heads_ref, temp_ref);
-    self->receive(
-      [&](uref&, uref&) {
-        //cout << "Col: scan done." << endl;
-      }
-    );
-    config.resize(2);
-    config[0] = k;
-    config[1] = 0;
-    conf_ref = dev.global_argument(config);
-    self->send(sc_count, conf_ref, blocks_ref, heads_ref, b128_ref);
-    self->receive(
-      [&](uref&, uref&, uref&, uref&) {
-        //cout << "Count step done." << endl;
-      }
-    );
-    self->send(sc_move, conf_ref,   temp_ref, out_ref,  heads_ref,
-                        blocks_ref, b128_ref, b128_ref, b128_ref);
-    self->receive(
-      [&](uref&, uref&, uref&, uref&,
-          uref&, uref&, uref&, uref&) {
-        //cout << "Merge step done." << endl;
-      }
-    );
-    temp_ref.swap(out_ref);
-    idx_conf = conf_ref.data();
-    //valid_or_exit(res_conf, "Can't read conf after stream compaction.");
-    conf = *idx_conf;
-    auto keycount = conf[1];
-    //valid_or_exit(keycnt == keycount, "Different amount of keys.");
- // cout << "Index has " << keycount << " keys." << endl;
-    // missing: exclusive scan over temp_ref
-    config.resize(2);
-    config[0] = keycount;
-    config[1] = 0;
-    conf_ref = dev.global_argument(config);
-    auto lazy_scan = mngr.spawn_stage<uvec,uvec,uvec>(prog_es, "lazy_scan",
-                                                   spawn_config{dim_vec{1}});
-    auto off_ref = dev.scratch_argument<uval>(k, buffer_type::output);
-    self->send(lazy_scan, conf_ref, temp_ref, off_ref);
-    self->receive(
-      [&](uref&, uref&, uref&) {
-        //cout << "Lazy scan done." << endl;
-      }
-    );
-    auto offs_opt = off_ref.data(keycount);
-/*
-    auto scan_up = mngr.spawn_stage<uvec,uvec>(prog_es, "upsweep", index_space_k);
-    auto scan_null = mngr.spawn_stage<uvec,uvec>(prog_es, "null_last",
-                                               spawn_config{dim_vec{1}});
-    auto scan_down = mngr.spawn_stage<uvec,uvec>(prog_es, "downsweep",
-                                               index_space_k);
-    uvec test_scan(k);
-    std::iota(begin(test_scan), end(test_scan), 0u);
-    temp_ref = dev.global_argument(test_scan);
-    auto d = 0;
-    config.resize(2);
-    config[0] = k;
-    config[1] = static_cast<uval>(d);
-    conf_ref = dev.global_argument(config);
-    self->send(scan_up, conf_ref, temp_ref);
-    auto done = false;
-    const auto bound = (std::log(k) / std::log(2)) - 1;
-    self->receive_while([&] { return !done; })(
-      [&](uref& conf, uref& temp) {
-        d = d + 1;
-        if (d <= bound) {
-          config[1] = static_cast<uval>(d);
-          conf = dev.global_argument(config);
-          self->send(scan_up, conf, temp);
-        } else {
-          done = true;
-        }
-      }
-    );
-    cout << "Scan: upsweep done." << endl;
-    self->send(scan_null, conf_ref, temp_ref);
-    self->receive(
-      [&](uref&, uref&) {
-        cout << "Scan: null last done." << endl;
-      }
-    );
-    d = bound; // (std::log(k) / std::log(2)) - 1;
-    config.resize(2);
-    config[0] = k;
-    config[1] = static_cast<uval>(d);
-    conf_ref = dev.global_argument(config);
-    self->send(scan_down, conf_ref, temp_ref);
-    done = false;
-    self->receive_while([&] { return !done; })(
-      [&](uref& conf, uref& temp) {
-        d = d - 1;
-        if (d >= 0) {
-          config[1] = static_cast<uval>(d);
-          conf = dev.global_argument(config);
-          self->send(scan_down, conf, temp);
-        } else {
-          done = true;
-        }
-      }
-    );
-    cout << "Scan: upsweep done." << endl;
-    auto offs_opt = temp_ref.data();
-*/
-    //valid_or_exit(offs_opt, "Can't read offsets back.");
-    auto offs = *offs_opt;
+    uref tmp_r;
+    self->send(col_prep, ndrange_k, chids_r, input_r);
+    self->receive([&](uref& chids, uref& tmp, uref& input, uref& heads) {
+      chids_r = chids;
+      tmp_r = tmp;
+      input_r = input;
+      heads_r = heads;
+    });
+    // cout << "Col: prepare done." << endl;
+    self->send(col_scan, ndrange_k, heads_r, tmp_r);
+    self->receive([&](uref& heads, uref& tmp) {
+      heads_r = heads;
+      tmp_r = tmp;
+    });
+    // cout << "Col: scan done." << endl;
+
+    wi = round_up(k, 128u);
+    uval keycount = 0;
+    auto ndrange_k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
+    auto out_ref = dev.scratch_argument<uval>(k, buffer_type::output);
+    self->send(sc_count, ndrange_k_128, heads_r, k);
+    self->receive([&](uref& blocks, uref& heads) {
+      blocks_r = blocks;
+      heads_r = heads;
+    });
+    // cout << "Count step done." << endl;
+    self->send(sc_move, ndrange_k_128, tmp_r, heads_r, blocks_r, k);
+    self->receive([&](uvec& data, uref&, uref& out, uref&, uref&) {
+      keycount = data[0];
+      heads_r = out;
+    });
+    //cout << "Merge step done." << endl;
+
+#ifdef WITH_CPU_TESTS
+    valid_or_exit(test_keycount == keycount, "Different amount of keys.");
+#endif // WITH_CPU_TESTS
+
+    // missing: exclusive scan over heads_r
+    uref offsets_r;
+    self->send(lazy_scan, heads_r, keycount);
+    self->receive([&](uref& offsets) {
+      offsets_r = offsets;
+    });
+    //cout << "Lazy scan done." << endl;
+    auto offsets_opt = offsets_r.data(keycount);
+    auto offsets = *offsets_opt;
+
+#ifdef WITH_CPU_TESTS
+    valid_or_exit(offsets == test_offsets, "Offsets differ.");
+#endif // WITH_CPU_TESTS
+
+    auto stop = high_resolution_clock::now();
+#ifdef SHOW_TIME_CONSUMPTION
+    cout << duration_cast<microseconds>(stop - from).count() << " us" << endl;
+#endif
+    cout //<< "Total: "
+         << duration_cast<microseconds>(stop - start).count() << " us" << endl;
     // idx_len --> length of index
     // keycount --> number of keys
     // idx --> contains index
     // offs --> contains offsets
-    //valid_or_exit(offs == offsets, "Offsets differ.");
-    auto stop = high_resolution_clock::now();
-#ifdef SHOW_TIME_CONSUMPTION
-    cout << duration_cast<microseconds>(stop - from).count()<< " us" << endl;
-#endif
-    cout //<< "Total: "
-         << duration_cast<microseconds>(stop - start).count()
-         << " us" << endl;
   }
   // clean up
   system.await_all_actors_done();

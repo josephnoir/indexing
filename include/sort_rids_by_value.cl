@@ -11,13 +11,11 @@
 
 // Kernels to create rids
 
-kernel void create_rids(global uint* config, global uint* input,
-                        global uint* rids) {
-  uint max_gi = config[0];
-  uint gi = get_global_id(0);
-  if (gi < max_gi) {
-    rids[gi] = gi;
-  }
+kernel void create_rids(global uint* input, global uint* rids,
+                        private uint maximum) {
+  uint idx = get_global_id(0);
+  if (idx < maximum)
+    rids[idx] = idx;
 }
 
 // Kernels for sorting

@@ -50,9 +50,8 @@ kernel void downsweep(global uint* config, global uint* data) {
   }
 }
 
-kernel void lazy_scan(global uint* config, global uint* in, global uint* out) {
+kernel void lazy_scan(global uint* in, global uint* out, private uint len) {
   uint idx = get_global_id(0);
-  uint len = config[0];
   if (idx == 0) {
     out[0] = 0;
     for (uint i = 1; i < len; ++i)

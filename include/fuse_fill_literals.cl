@@ -12,10 +12,9 @@
  *
  */
 
-kernel void prepare_index(global uint* conf, global uint* chids,
-                          global uint* lits, global uint* index) {
+kernel void prepare_index(global uint* chids, global uint* lits,
+                          global uint* index, private uint k) {
   uint idx = get_global_id(0);
-  uint k = conf[0];
   if (idx < k) {
     index[2 * idx    ] = chids[idx];
     index[2 * idx + 1] = lits[idx];
