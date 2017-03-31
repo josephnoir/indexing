@@ -20,11 +20,17 @@
 #include "caf/opencl/mem_ref.hpp"
 #include "caf/opencl/actor_facade_phase.hpp"
 
-#define WITH_CPU_TESTS
+//#define WITH_CPU_TESTS
 #define SHOW_TIME_CONSUMPTION
+#define WITH_DESCRIPTION
 #ifdef WITH_CPU_TESTS
 # undef SHOW_TIME_CONSUMPTION
 #endif // WITH_CPU_TESTS
+#ifdef WITH_DESCRIPTION
+# define DESCRIPTION(x) (x)
+#else
+# define DESCRIPTION(x) ""
+#endif
 
 using namespace std;
 using namespace std::chrono;
@@ -413,24 +419,6 @@ void caf_main(actor_system& system, const config& cfg) {
 
 #ifdef WITH_CPU_TESTS
   // Create test data
-  auto test_input = values;
-  uvec test_rids(test_input.size());
-  uvec test_chids(test_input.size());
-  uvec test_lits(test_input.size());
-  sort_rids_by_value(test_input, test_rids);
-  produce_chunk_id_literals(test_rids, test_chids, test_lits);
-  auto test_k = merged_lit_by_val_chids(test_input, test_chids, test_lits);
-  uvec test_chids_produce{test_chids};
-  produce_fills(test_input, test_chids_produce, test_k);
-  uvec test_index(2 * test_k);
-  uvec test_chids_fuse{test_chids_produce};
-  auto test_index_length = fuse_fill_literals(test_chids_fuse, test_lits, test_index, test_k);
-  uvec test_offsets(test_k);
-  uvec test_input_col{test_input};
-  auto test_keycount = compute_colum_length(test_input_col, test_chids_fuse, test_offsets, test_k);
-  cout << "Created test data." << endl;
-  cout << "Index has " << test_index_length << " elements with "
-       << test_keycount << " keys." << endl;
 #endif // WITH_CPU_TESTS
 
   // load kernels
@@ -509,7 +497,8 @@ void caf_main(actor_system& system, const config& cfg) {
     auto radix_count = mngr.spawn_new(prog_radix, "count", radix_range,
                                       in_out<uval,mref,mref>{},
                                       in_out<uval,mref,mref>{},
-                                      priv<radix_config>{rc}, priv<uval,val>{});
+                                      priv<radix_config>{rc},
+                                      priv<uval,val>{});
     auto radix_scan = mngr.spawn_new(prog_radix, "scan", radix_range,
                                      in_out<uval,mref,mref>{},
                                      in_out<uval,mref,mref>{},
@@ -585,7 +574,6 @@ void caf_main(actor_system& system, const config& cfg) {
 #endif
 
     // kernel executions
-    // rids_r used as rids buffer
     scoped_actor self{system};
     self->send(rids_1, values);
     uref input_r;
@@ -594,11 +582,20 @@ void caf_main(actor_system& system, const config& cfg) {
       input_r = move(in);
       rids_r = move(rids);
     });
+
+#ifdef WITH_CPU_TESTS
+    {
+      auto input_exp = input_r.data();
+      auto input = *input_exp;
+      valid_or_exit(input == values);
+    }
+#endif // WITH_CPU_TESTS
+
     {
       // radix sort for values by key using inpt as keys and temp as values
       auto r_keys_in = input_r;
-      auto r_keys_out = dev.scratch_argument<uval>(n, buffer_type::input_output);
       auto r_values_in = rids_r;
+      auto r_keys_out = dev.scratch_argument<uval>(n, buffer_type::input_output);
       auto r_values_out = dev.scratch_argument<uval>(n, buffer_type::input_output);
       // TODO: see how performance is affected if we create new arrays each time
       auto r_counters = dev.scratch_argument<uval>(counters);
@@ -606,49 +603,56 @@ void caf_main(actor_system& system, const config& cfg) {
       uint32_t iterations = cardinality / l_val;
       for (uint32_t i = 0; i < iterations; ++i) {
         uval offset = l_val * i;
-        self->send(radix_zero, r_counters);
         if (i > 0) {
           std::swap(r_keys_in, r_keys_out);
           std::swap(r_values_in, r_values_out);
         }
-        self->receive([&](uref&) { });
+        self->send(radix_zero, r_counters);
+        self->receive([&](uref& /*counters*/) { });
         self->send(radix_count, r_keys_in, r_counters, offset);
-        self->receive([&](uref&, uref&) { });
+        self->receive([&](uref& /*k*/, uref& /*c*/) { });
         self->send(radix_scan, r_keys_in, r_counters, r_prefixes, offset);
-        self->receive([&](uref&, uref&, uref&) { });
+        self->receive([&](uref& /*k*/, uref& /*c*/, uref& /*p*/) { });
         self->send(radix_move, r_keys_in, r_keys_out, r_values_in, r_values_out,
                                r_counters, r_prefixes, offset);
-        self->receive([&](uref&, uref&, uref&, uref&, uref&, uref&) { });
+        self->receive([&](uref& /*ki*/, uref& /*ko*/, uref& /*vi*/, uref& /*vo*/,
+                          uref& /*c*/, uref& /*p*/) { });
       }
       input_r = r_keys_out;
       rids_r = r_values_out;
     }
-    //cout << "DONE: sort_rids_by_value" << endl;
 
 #ifdef SHOW_TIME_CONSUMPTION
+    //cout << "DONE: sort_rids_by_value" << endl;
     to = high_resolution_clock::now();
-    cout << duration_cast<microseconds>(to - from).count() << " us" << endl;
+    cout << DESCRIPTION("sort_rids_by_value:\t\t")
+         << duration_cast<microseconds>(to - from).count() << " us" << endl;
     from = high_resolution_clock::now();
 #endif
 
 #ifdef WITH_CPU_TESTS
-    auto inpt_exp = input_r.data();
+    auto test_input = values;
+    uvec test_rids(test_input.size());
+    uvec test_chids(test_input.size());
+    uvec test_lits(test_input.size());
+    sort_rids_by_value(test_input, test_rids);
+    auto input_exp = input_r.data();
     auto rids_exp = rids_r.data();
-    if (!inpt_exp) {
-      cout << "Can't read keys back (" << system.render(inpt_exp.error())
+    if (!input_exp) {
+      cout << "Can't read keys back (" << system.render(input_exp.error())
            << ")." << endl;
     } else if (!rids_exp) {
       cout << "Can't read values back (" << system.render(rids_exp.error())
            << ")." << endl;
     } else {
-      auto inp = *inpt_exp;
-      auto rid = *rids_exp;
+      auto input = *input_exp;
+      auto rids = *rids_exp;
       vector<size_t> failed_keys;
       vector<size_t> failed_values;
-      for (size_t i = 0; i < inp.size(); ++i) {
-        if (inp[i] != test_input[i])
+      for (size_t i = 0; i < input.size(); ++i) {
+        if (input[i] != test_input[i])
           failed_keys.push_back(i);
-        if (rid[i] != test_rids[i])
+        if (rids[i] != test_rids[i])
           failed_values.push_back(i);
       }
       if (!failed_keys.empty() || !failed_values.empty()) {
@@ -669,24 +673,26 @@ void caf_main(actor_system& system, const config& cfg) {
     });
 
 #ifdef WITH_CPU_TESTS
-      cout << "DONE: produce_chunk_id_literals" << endl;
-      auto in_exp = input_r.data();
-      auto ch_exp = chids_r.data();
-      auto li_exp = lits_r.data();
-      valid_or_exit(in_exp);
-      valid_or_exit(ch_exp);
-      valid_or_exit(li_exp);
-      auto in = *in_exp;
-      auto ch = *ch_exp;
-      auto li = *li_exp;
-      cout << "Input equal: " << (in == test_input) << endl;
-      cout << "Chids equal: " << (ch == test_chids) << endl;
-      cout << "Lits  equal: " << (li == test_lits) << endl;
+    produce_chunk_id_literals(test_rids, test_chids, test_lits);
+    auto in_exp = input_r.data();
+    auto ch_exp = chids_r.data();
+    auto li_exp = lits_r.data();
+    valid_or_exit(in_exp);
+    valid_or_exit(ch_exp);
+    valid_or_exit(li_exp);
+    auto in = *in_exp;
+    auto ch = *ch_exp;
+    auto li = *li_exp;
+    valid_or_exit((in == test_input));
+    valid_or_exit((ch == test_chids));
+    valid_or_exit((li == test_lits));
 #endif // WITH_CPU_TESTS
 
 #ifdef SHOW_TIME_CONSUMPTION
+    //cout << "DONE: produce_chunk_id_literals" << endl;
     to = high_resolution_clock::now();
-    cout << duration_cast<microseconds>(to - from).count()<< " us" << endl;
+    cout << DESCRIPTION("produce_chunk_id_literals:\t")
+         << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
 
@@ -726,17 +732,18 @@ void caf_main(actor_system& system, const config& cfg) {
       k = res[0];
       lits_r.swap(out);
     });
-    
     // cout << "Merge step done (lits)." << endl;
-    // cout << "DONE: merge_lit_by_val_chids." << endl;
 
 #ifdef SHOW_TIME_CONSUMPTION
+    // cout << "DONE: merge_lit_by_val_chids." << endl;
     to = high_resolution_clock::now();
-    cout << duration_cast<microseconds>(to - from).count()<< " us" << endl;
+    cout << DESCRIPTION("merge_lit_by_val_chids:\t\t")
+         << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
 
 #ifdef WITH_CPU_TESTS
+    auto test_k = merged_lit_by_val_chids(test_input, test_chids, test_lits);
     valid_or_exit(k == test_k);
     auto res_inpt = input_r.data();
     auto res_chid = chids_r.data();
@@ -758,15 +765,18 @@ void caf_main(actor_system& system, const config& cfg) {
 
     self->send(fills, spawn_config{dim_vec{k}}, input_r, chids_r, k);
     self->receive([&](uref& out) { chids_r.swap(out); });
-    // cout << "DONE: produce fills." << endl;
 
 #ifdef SHOW_TIME_CONSUMPTION
+    // cout << "DONE: produce fills." << endl;
     to = high_resolution_clock::now();
-    cout << duration_cast<microseconds>(to - from).count()<< " us" << endl;
+    cout << DESCRIPTION("produce_fills:\t\t\t")
+         << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
 
 #ifdef WITH_CPU_TESTS
+    uvec test_chids_produce{test_chids};
+    produce_fills(test_input, test_chids_produce, test_k);
     res_inpt = input_r.data();
     res_chid = chids_r.data();
     valid_or_exit(res_inpt, "destroyed input");
@@ -797,24 +807,11 @@ void caf_main(actor_system& system, const config& cfg) {
       index_r = out;
       //cout << "Merge step done." << endl;
     });
+
+#ifdef SHOW_TIME_CONSUMPTION
     //cout << "DONE: fuse_fill_literals." << endl;
-
-#ifdef SHOW_TIME_CONSUMPTION
     to = high_resolution_clock::now();
-    cout << duration_cast<microseconds>(to - from).count()<< " us" << endl;
-    from = high_resolution_clock::now();
-#endif
-
-    auto index_opt = index_r.data(index_length);
-#ifdef WITH_CPU_TESTS
-    valid_or_exit(test_index_length == index_length, "Lengths don't match");
-    valid_or_exit(index_opt, "Can't read index after stream compaction.");
-#endif
-    auto index = *index_opt;
-
-#ifdef SHOW_TIME_CONSUMPTION
-    to = high_resolution_clock::now();
-    cout // << "Reading back index of length " << idx_len << " took "
+    cout << DESCRIPTION("fuse_fill_literals:\t\t")
          << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
@@ -856,34 +853,66 @@ void caf_main(actor_system& system, const config& cfg) {
     });
     //cout << "Merge step done." << endl;
 
-#ifdef WITH_CPU_TESTS
-    valid_or_exit(test_keycount == keycount, "Different amount of keys.");
-#endif // WITH_CPU_TESTS
-
-    // missing: exclusive scan over heads_r
+    // TODO: better exclusive scan over heads_r
     uref offsets_r;
     self->send(lazy_scan, heads_r, keycount);
     self->receive([&](uref& offsets) {
       offsets_r = offsets;
     });
     //cout << "Lazy scan done." << endl;
+
+#ifdef SHOW_TIME_CONSUMPTION
+    to = high_resolution_clock::now();
+    cout << DESCRIPTION("compute_colum_length:\t\t")
+         << duration_cast<microseconds>(to - from).count() << " us" << endl;
+    from = high_resolution_clock::now();
+#endif
+
+    auto index_opt = index_r.data(index_length);
     auto offsets_opt = offsets_r.data(keycount);
-    auto offsets = *offsets_opt;
+
+#ifdef SHOW_TIME_CONSUMPTION
+    to = high_resolution_clock::now();
+    cout << DESCRIPTION("Reading back data:\t\t")
+         << duration_cast<microseconds>(to - from).count()<< " us" << endl;
+    from = high_resolution_clock::now();
+#endif
 
 #ifdef WITH_CPU_TESTS
+    valid_or_exit(index_opt, "Can't read index.");
+    valid_or_exit(offsets_opt, "Can't read offsets.");
+    auto index = *index_opt;
+    auto offsets = *offsets_opt;
+    // create test index
+    uvec test_index(2 * test_k);
+    uvec test_chids_fuse{test_chids_produce};
+    auto test_index_length = fuse_fill_literals(test_chids_fuse, test_lits,
+                                                test_index, test_k);
+    valid_or_exit(test_index_length == index_length, "Index lengths don't match");
+    valid_or_exit(index == test_index, "Indexes differ.");
+    // create test offsets
+    uvec test_offsets(test_k);
+    uvec test_input_col{test_input};
+    auto test_keycount = compute_colum_length(test_input_col, test_chids_fuse,
+                                              test_offsets, test_k);
+    valid_or_exit(test_keycount == keycount, "Offsets have different keycount.");
     valid_or_exit(offsets == test_offsets, "Offsets differ.");
 #endif // WITH_CPU_TESTS
 
     auto stop = high_resolution_clock::now();
-#ifdef SHOW_TIME_CONSUMPTION
-    cout << duration_cast<microseconds>(stop - from).count() << " us" << endl;
-#endif
-    cout //<< "Total: "
+    cout << DESCRIPTION("Total:\t\t\t\t")
          << duration_cast<microseconds>(stop - start).count() << " us" << endl;
     // idx_len --> length of index
     // keycount --> number of keys
     // idx --> contains index
     // offs --> contains offsets
+#ifdef WITH_CPU_TESTS
+    cout << "Run included tests of calculated data." << endl
+         << "Test index has " << test_index_length << " elements with "
+         << test_keycount << " keys." << endl
+         << "Program got " << index_length << " elements with "
+         << keycount << " keys." << endl;
+#endif // WITH_CPU_TESTS
   }
   // clean up
   system.await_all_actors_done();
