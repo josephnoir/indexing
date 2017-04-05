@@ -20,7 +20,7 @@
 #include "caf/opencl/mem_ref.hpp"
 #include "caf/opencl/actor_facade_phase.hpp"
 
-//#define WITH_CPU_TESTS
+#define WITH_CPU_TESTS
 #define SHOW_TIME_CONSUMPTION
 #define WITH_DESCRIPTION
 #ifdef WITH_CPU_TESTS
@@ -437,12 +437,29 @@ void caf_main(actor_system& system, const config& cfg) {
   auto ndrange = spawn_config{dim_vec{n}};
   auto wi = round_up(n, 128ul);
   auto ndrange_128  = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
+  auto ndrange_128_sum = spawn_config{dim_vec{round_up(wi / 128, 128ul)}, {},
+                                      dim_vec{128}};
   // TODO: not a nice solution, need some better appraoch
   auto wi_two = [&](uvec&, uref&) { return size_t{wi / 128}; };
   auto k_once = [](uref&, uref&, uref&, uval k) { return size_t{k}; };
   auto one = [](uref&, uref&, uref&, uval) { return size_t{1}; };
   auto k_double = [](uref&, uref&, uval k) { return size_t{2 * k}; };
   auto k_two = [](uref&, uval k) { return size_t{k}; };
+  // exclusive scan
+  auto es_m = wi / 128;
+  size_t es_group_size = 128;
+  size_t es_global_range = round_up((es_m + 1) / 2, es_group_size);
+  size_t es_local_range = es_group_size;
+  size_t es_groups = (es_global_range / es_local_range);
+  auto es_range_h = spawn_config{dim_vec{es_global_range}, {},
+                                 dim_vec{es_local_range}};
+  auto es_range_g = spawn_config{dim_vec{round_up(es_groups, es_local_range)},
+                                 {}, dim_vec{es_local_range}};
+  auto es_incs = [&](const uvec&, uval n) -> size_t {
+    // calculate number of groups, depending on the group size from the input size
+    return (round_up((n + 1) / 2, static_cast<uval>(es_group_size)) / es_group_size);
+  };
+
 
   // sort configuration
   // thread block has multiple thread groups has multiple threads
@@ -535,6 +552,7 @@ void caf_main(actor_system& system, const config& cfg) {
                                    in_out<uval,mref,mref>{},
                                    local<uval>{128},
                                    priv<uval,val>{});
+    // sum operation is handled by es actors belows (exclusive scan)
     auto sc_move = mngr.spawn_new(prog_sc, "moveValidElementsStaged",
                                   ndrange_128,
                                   out<uval,val>{one},
@@ -568,6 +586,21 @@ void caf_main(actor_system& system, const config& cfg) {
                                     in<uval,mref>{},
                                     out<uval,mref>{k_two},
                                     priv<uval,val>{});
+    // exclusive scan
+    auto es1 = mngr.spawn_new(prog_es, "es_phase_1", es_range_h,
+                              in_out<uval, mref, mref>{},
+                              out<uval,mref>{es_incs},
+                              local<uval>{es_group_size * 2},
+                              priv<uval, val>{});
+    auto es2 = mngr.spawn_new(prog_es, "es_phase_2", es_range_g,
+                              in_out<uval,mref,mref>{},
+                              in_out<uval,mref,mref>{},
+                              local<uval>{es_group_size * 2},
+                              priv<uval, val>{});
+    auto es3 = mngr.spawn_new(prog_es, "es_phase_3", es_range_h,
+                              in_out<uval,mref,mref>{},
+                              in<uval,mref>{},
+                              priv<uval, val>{});
 #ifdef SHOW_TIME_CONSUMPTION
     auto to = high_resolution_clock::now();
     auto from = high_resolution_clock::now();
@@ -622,14 +655,6 @@ void caf_main(actor_system& system, const config& cfg) {
       rids_r = r_values_out;
     }
 
-#ifdef SHOW_TIME_CONSUMPTION
-    //cout << "DONE: sort_rids_by_value" << endl;
-    to = high_resolution_clock::now();
-    cout << DESCRIPTION("sort_rids_by_value:\t\t")
-         << duration_cast<microseconds>(to - from).count() << " us" << endl;
-    from = high_resolution_clock::now();
-#endif
-
 #ifdef WITH_CPU_TESTS
     auto test_input = values;
     uvec test_rids(test_input.size());
@@ -663,6 +688,14 @@ void caf_main(actor_system& system, const config& cfg) {
       }
     }
 #endif // WITH_CPU_TESTS
+
+#ifdef SHOW_TIME_CONSUMPTION
+    //cout << "DONE: sort_rids_by_value" << endl;
+    to = high_resolution_clock::now();
+    cout << DESCRIPTION("sort_rids_by_value:\t\t")
+         << duration_cast<microseconds>(to - from).count() << " us" << endl;
+    from = high_resolution_clock::now();
+#endif
 
     self->send(chunks, rids_r);
     uref chids_r;
@@ -698,13 +731,16 @@ void caf_main(actor_system& system, const config& cfg) {
 
     uref heads_r;
     uval k = 0;
+    auto t1 = high_resolution_clock::now();
     self->send(merge_heads, input_r, chids_r);
     self->receive([&](uref&, uref&, uref& heads) {
       heads_r = heads;
     });
+    auto t2 = high_resolution_clock::now();
     // cout << "Created heads array" << endl;
     self->send(merge_scan, heads_r, lits_r);
     self->receive([&](uref&) { });
+    auto t3 = high_resolution_clock::now();
     // cout << "Merged values" << endl;
     // stream compact inpt, chid, lits by heads value
     uref blocks_r;
@@ -713,6 +749,17 @@ void caf_main(actor_system& system, const config& cfg) {
     self->receive([&](uref& blocks, uref&) {
       blocks_r = blocks;
     });
+    auto t4 = high_resolution_clock::now();
+    self->send(es1, blocks_r, static_cast<uval>(es_m));
+    self->receive([&](uref& data, uref& increments) {
+      self->send(es2, data, increments, static_cast<uval>(es_groups));
+    });
+    self->receive([&](uref& data, uref& increments) {
+      self->send(es3, data, increments, static_cast<uval>(es_m));
+    });
+    self->receive([&](const uref& results) {
+      blocks_r = results;
+    });
     // cout << "Count step done." << endl;
     // TODO: Can we do this concurrently?
     self->send(sc_move, input_r, heads_r, blocks_r, len);
@@ -720,18 +767,21 @@ void caf_main(actor_system& system, const config& cfg) {
       k = res[0];
       input_r.swap(out);
     });
+    auto t5 = high_resolution_clock::now();
     //cout << "Merge step done (input)." << endl;
     self->send(sc_move, chids_r, heads_r, blocks_r, len);
     self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
       k = res[0];
       chids_r.swap(out);
     });
+    auto t6 = high_resolution_clock::now();
     // cout << "Merge step done (chids)." << endl;
     self->send(sc_move, lits_r, heads_r, blocks_r, len);
     self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
       k = res[0];
       lits_r.swap(out);
     });
+    auto t7 = high_resolution_clock::now();
     // cout << "Merge step done (lits)." << endl;
 
 #ifdef SHOW_TIME_CONSUMPTION
@@ -739,6 +789,12 @@ void caf_main(actor_system& system, const config& cfg) {
     to = high_resolution_clock::now();
     cout << DESCRIPTION("merge_lit_by_val_chids:\t\t")
          << duration_cast<microseconds>(to - from).count()<< " us" << endl;
+    cout << " merge headers: " << duration_cast<microseconds>(t2 - t1).count() << endl
+         << " merge scane  : " << duration_cast<microseconds>(t3 - t2).count() << endl
+         << " sc count     : " << duration_cast<microseconds>(t4 - t3).count() << endl
+         << " sc move      : " << duration_cast<microseconds>(t5 - t4).count() << endl
+         << " sc move      : " << duration_cast<microseconds>(t6 - t5).count() << endl
+         << " sc move      : " << duration_cast<microseconds>(t7 - t6).count() << endl;
     from = high_resolution_clock::now();
 #endif
 
@@ -766,14 +822,6 @@ void caf_main(actor_system& system, const config& cfg) {
     self->send(fills, spawn_config{dim_vec{k}}, input_r, chids_r, k);
     self->receive([&](uref& out) { chids_r.swap(out); });
 
-#ifdef SHOW_TIME_CONSUMPTION
-    // cout << "DONE: produce fills." << endl;
-    to = high_resolution_clock::now();
-    cout << DESCRIPTION("produce_fills:\t\t\t")
-         << duration_cast<microseconds>(to - from).count()<< " us" << endl;
-    from = high_resolution_clock::now();
-#endif
-
 #ifdef WITH_CPU_TESTS
     uvec test_chids_produce{test_chids};
     produce_fills(test_input, test_chids_produce, test_k);
@@ -789,30 +837,63 @@ void caf_main(actor_system& system, const config& cfg) {
     valid_or_exit(new_chid == test_chids_produce, "chids not equal");
 #endif // WITH_CPU_TESTS
 
+#ifdef SHOW_TIME_CONSUMPTION
+    // cout << "DONE: produce fills." << endl;
+    to = high_resolution_clock::now();
+    cout << DESCRIPTION("produce_fills:\t\t\t")
+         << duration_cast<microseconds>(to - from).count()<< " us" << endl;
+    from = high_resolution_clock::now();
+#endif
+
     uref index_r;
     size_t index_length = 0;
+    auto t11 = high_resolution_clock::now();
     self->send(fuse_prep, spawn_config{dim_vec{k}}, chids_r, lits_r, k);
     self->receive([&](uref& index) { index_r = index; });
     auto idx_e = index_r.data();
     // cout << "Prepared index." << endl;
     wi = round_up(2 * k, 128u);
     auto ndrange_2k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
+    // new calculactions for scan
+    es_m = wi / 128;
+    es_global_range = round_up((es_m + 1) / 2, es_group_size);
+    es_groups = (es_global_range / es_local_range);
+    es_range_h = spawn_config{dim_vec{es_global_range}, {},
+                              dim_vec{es_local_range}};
+    es_range_g = spawn_config{dim_vec{round_up(es_groups, es_local_range)}, {},
+                              dim_vec{es_local_range}};
+    auto t12 = high_resolution_clock::now();
     self->send(sc_count, ndrange_2k_128, index_r, 2 * k);
     self->receive([&](uref& blocks, uref&) {
       blocks_r = blocks;
     });
+    self->send(es1, es_range_h, blocks_r, static_cast<uval>(es_m));
+    self->receive([&](uref& data, uref& increments) {
+      self->send(es2, es_range_g, data, increments, static_cast<uval>(es_groups));
+    });
+    self->receive([&](uref& data, uref& increments) {
+      self->send(es3, es_range_h, data, increments, static_cast<uval>(es_m));
+    });
+    self->receive([&](const uref& results) {
+      blocks_r = results;
+    });
+    auto t13 = high_resolution_clock::now();
     self->send(sc_move, ndrange_2k_128, index_r, index_r, blocks_r, 2 * k);
     self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
       index_length = res[0];
       index_r = out;
       //cout << "Merge step done." << endl;
     });
+    auto t14 = high_resolution_clock::now();
 
 #ifdef SHOW_TIME_CONSUMPTION
     //cout << "DONE: fuse_fill_literals." << endl;
     to = high_resolution_clock::now();
     cout << DESCRIPTION("fuse_fill_literals:\t\t")
          << duration_cast<microseconds>(to - from).count()<< " us" << endl;
+    cout << " fuse prep    : " << duration_cast<microseconds>(t12 - t11).count() << endl
+         << " sc count     : " << duration_cast<microseconds>(t13 - t12).count() << endl
+         << " sc move      : " << duration_cast<microseconds>(t14 - t13).count() << endl;
     from = high_resolution_clock::now();
 #endif
 
@@ -840,12 +921,31 @@ void caf_main(actor_system& system, const config& cfg) {
     uval keycount = 0;
     auto ndrange_k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
     auto out_ref = dev.scratch_argument<uval>(k, buffer_type::output);
+    // new calculations for scan actors
+    es_m = wi / 128;
+    es_global_range = round_up((es_m + 1) / 2, es_group_size);
+    es_groups = (es_global_range / es_local_range);
+    es_range_h = spawn_config{dim_vec{es_global_range}, {},
+                              dim_vec{es_local_range}};
+    es_range_g = spawn_config{dim_vec{round_up(es_groups, es_local_range)}, {},
+                              dim_vec{es_local_range}};
+    // stream compaction
     self->send(sc_count, ndrange_k_128, heads_r, k);
     self->receive([&](uref& blocks, uref& heads) {
       blocks_r = blocks;
       heads_r = heads;
     });
     // cout << "Count step done." << endl;
+    self->send(es1, es_range_h, blocks_r, static_cast<uval>(es_m));
+    self->receive([&](uref& data, uref& increments) {
+      self->send(es2, es_range_g, data, increments, static_cast<uval>(es_groups));
+    });
+    self->receive([&](uref& data, uref& increments) {
+      self->send(es3, es_range_h, data, increments, static_cast<uval>(es_m));
+    });
+    self->receive([&](const uref& results) {
+      blocks_r = results;
+    });
     self->send(sc_move, ndrange_k_128, tmp_r, heads_r, blocks_r, k);
     self->receive([&](uvec& data, uref&, uref& out, uref&, uref&) {
       keycount = data[0];
