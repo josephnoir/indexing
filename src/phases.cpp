@@ -32,6 +32,8 @@
 # define DESCRIPTION(x) ""
 #endif
 
+#define POSITION string(__FILE__) + ":" + to_string(__LINE__)
+
 using namespace std;
 using namespace std::chrono;
 using namespace caf;
@@ -413,7 +415,7 @@ void caf_main(actor_system& system, const config& cfg) {
     cerr << "Device " << cfg.device_name << " not found." << endl;
     return;
   } /*else {
-    cout << "Using device named '" << opt->get_name() << "'." << endl;
+    cout << "Using device named '" << opt->get_sizeame() << "'." << endl;
   }*/
   auto dev = *opt;
 
@@ -434,7 +436,10 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // configuration parameters
   auto n = values.size();
+  size_t max_wg_size = dev.get_max_work_group_size();
   auto ndrange = spawn_config{dim_vec{n}};
+  auto ndrange_rounded = spawn_config{dim_vec{round_up(n, max_wg_size)}, {},
+                                      dim_vec{max_wg_size}};
   auto wi = round_up(n, 128ul);
   auto ndrange_128  = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
   // TODO: not a nice solution, need some better appraoch
@@ -457,6 +462,7 @@ void caf_main(actor_system& system, const config& cfg) {
     // calculate number of groups, depending on the group size from the input size
     return (round_up((n + 1) / 2, static_cast<uval>(es_group_size)) / es_group_size);
   };
+  auto get_size = [](const uref& in) -> size_t { return in.size(); };
 
 
   // sort configuration
@@ -533,9 +539,25 @@ void caf_main(actor_system& system, const config& cfg) {
                                      priv<radix_config>{rc},
                                      priv<uval,val>{});
     // produce chuncks ...
+    /*
     auto chunks = mngr.spawn_new(prog_chunks, "produce_chunks", ndrange,
                                  in_out<uval,mref,mref>{},
                                  out<uval,mref>{}, out<uval,mref>{});
+    */
+    auto chunks = mngr.spawn_new(prog_chunks, "produce_chunks2",
+                                 ndrange_rounded,
+                                 in_out<uval,mref,mref>{},
+                                 out<uval,mref>{get_size},
+                                 out<uval,mref>{get_size},
+                                 priv<uval>{static_cast<uval>(n)});
+    /*
+    auto chunks = mngr.spawn_new(prog_chunks, "produce_chunks3",
+                                 ndrange_rounded,
+                                 in_out<uval,mref,mref>{},
+                                 out<uval,mref>{get_size},
+                                 out<uval,mref>{get_size},
+                                 priv<uval>{static_cast<uval>(n)});
+    */
     // <uvec, uvec, uvec>
     auto merge_heads = mngr.spawn_new(prog_merge, "create_heads", ndrange,
                                       in_out<uval,mref,mref>{},
@@ -618,7 +640,7 @@ void caf_main(actor_system& system, const config& cfg) {
     {
       auto input_exp = input_r.data();
       auto input = *input_exp;
-      valid_or_exit(input == values);
+      valid_or_exit(input == values, POSITION);
     }
 #endif // WITH_CPU_TESTS
 
@@ -709,15 +731,30 @@ void caf_main(actor_system& system, const config& cfg) {
     auto in_exp = input_r.data();
     auto ch_exp = chids_r.data();
     auto li_exp = lits_r.data();
-    valid_or_exit(in_exp);
-    valid_or_exit(ch_exp);
-    valid_or_exit(li_exp);
+    valid_or_exit(in_exp, POSITION);
+    valid_or_exit(ch_exp, POSITION);
+    valid_or_exit(li_exp, POSITION);
     auto in = *in_exp;
     auto ch = *ch_exp;
     auto li = *li_exp;
-    valid_or_exit((in == test_input));
-    valid_or_exit((ch == test_chids));
-    valid_or_exit((li == test_lits));
+    {
+      vector<size_t> ch_failures;
+      vector<size_t> li_failures;
+      for (size_t i = 0; i < ch.size(); ++i) {
+        if (ch[i] != test_chids[i])
+          ch_failures.push_back(i);
+        if (li[i] != test_lits[i])
+          li_failures.push_back(i);
+      }
+      if (!ch_failures.empty() || !li_failures.empty()) {
+        cout << "Failed for " << ch_failures.size() << " chids and "
+             << li_failures.size() << " literals." << endl;
+        return;
+      }
+    }
+    valid_or_exit((in == test_input), POSITION);
+    valid_or_exit((ch == test_chids), POSITION);
+    valid_or_exit((li == test_lits), POSITION);
 #endif // WITH_CPU_TESTS
 
 #ifdef SHOW_TIME_CONSUMPTION
@@ -822,22 +859,22 @@ void caf_main(actor_system& system, const config& cfg) {
 
 #ifdef WITH_CPU_TESTS
     auto test_k = merged_lit_by_val_chids(test_input, test_chids, test_lits);
-    valid_or_exit(k == test_k);
+    valid_or_exit(k == test_k, POSITION);
     auto res_inpt = input_r.data();
     auto res_chid = chids_r.data();
     auto res_lits = lits_r.data();
-    valid_or_exit(res_inpt);
-    valid_or_exit(res_chid);
-    valid_or_exit(res_lits);
+    valid_or_exit(res_inpt, POSITION);
+    valid_or_exit(res_chid, POSITION);
+    valid_or_exit(res_lits, POSITION);
     uvec new_inpt{*res_inpt};
     uvec new_chid{*res_chid};
     uvec new_lits{*res_lits};
     new_inpt.resize(k);
     new_chid.resize(k);
     new_lits.resize(k);
-    valid_or_exit(new_inpt == test_input, "input not equal");
-    valid_or_exit(new_chid == test_chids, "chids not equal");
-    valid_or_exit(new_lits == test_lits, "lits not equal");
+    valid_or_exit(new_inpt == test_input, POSITION + " input not equal");
+    valid_or_exit(new_chid == test_chids, POSITION + " chids not equal");
+    valid_or_exit(new_lits == test_lits, POSITION + " lits not equal");
 #endif // WITH_CPU_TESTS
 
 
@@ -849,8 +886,8 @@ void caf_main(actor_system& system, const config& cfg) {
     produce_fills(test_input, test_chids_produce, test_k);
     res_inpt = input_r.data();
     res_chid = chids_r.data();
-    valid_or_exit(res_inpt, "destroyed input");
-    valid_or_exit(res_chid, "can't read fills");
+    valid_or_exit(res_inpt, POSITION + " destroyed input");
+    valid_or_exit(res_chid, POSITION + " can't read fills");
     new_inpt = *res_inpt;
     new_chid = *res_chid;
     new_inpt.resize(k);
@@ -1036,22 +1073,21 @@ void caf_main(actor_system& system, const config& cfg) {
                                               test_offsets, test_k);
     valid_or_exit(test_keycount == keycount, "Offsets have different keycount.");
     valid_or_exit(offsets == test_offsets, "Offsets differ.");
-#endif // WITH_CPU_TESTS
-
-    auto stop = high_resolution_clock::now();
-    cout << DESCRIPTION("Total:\t\t\t\t")
-         << duration_cast<microseconds>(stop - start).count() << " us" << endl;
-    // idx_len --> length of index
-    // keycount --> number of keys
-    // idx --> contains index
-    // offs --> contains offsets
-#ifdef WITH_CPU_TESTS
     cout << "Run included tests of calculated data." << endl
          << "Test index has " << test_index_length << " elements with "
          << test_keycount << " keys." << endl
          << "Program got " << index_length << " elements with "
          << keycount << " keys." << endl;
 #endif // WITH_CPU_TESTS
+
+    auto stop = high_resolution_clock::now();
+    cout << DESCRIPTION("Total:\t\t\t\t")
+         << duration_cast<microseconds>(stop - start).count() << " us" << endl;
+    // Calculated data:
+    // index_length --> length of index
+    // keycount     --> number of keys
+    // index        --> contains index
+    // offsets      --> contains offsets
   }
   // clean up
   system.await_all_actors_done();
