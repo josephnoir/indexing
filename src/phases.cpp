@@ -710,7 +710,7 @@ void caf_main(actor_system& system, const config& cfg) {
 #endif // WITH_CPU_TESTS
 
 #ifdef SHOW_TIME_CONSUMPTION
-    input_r.synchronize();
+    dev.synchronize();
     //cout << "DONE: sort_rids_by_value" << endl;
     to = high_resolution_clock::now();
     cout << DESCRIPTION("sort_rids_by_value:\t\t")
@@ -758,7 +758,7 @@ void caf_main(actor_system& system, const config& cfg) {
 #endif // WITH_CPU_TESTS
 
 #ifdef SHOW_TIME_CONSUMPTION
-    chids_r.synchronize();
+    dev.synchronize();
     //cout << "DONE: produce_chunk_id_literals" << endl;
     to = high_resolution_clock::now();
     cout << DESCRIPTION("produce_chunk_id_literals:\t")
@@ -777,13 +777,13 @@ void caf_main(actor_system& system, const config& cfg) {
     });
 #ifdef SHOW_TIME_CONSUMPTION
     auto t2 = high_resolution_clock::now();
-    heads_r.synchronize();
+    dev.synchronize();
 #endif
     // cout << "Created heads array" << endl;
     self->send(merge_scan, heads_r, lits_r);
     self->receive([&](uref&) { });
 #ifdef SHOW_TIME_CONSUMPTION
-    lits_r.synchronize();
+    dev.synchronize();
     auto t3 = high_resolution_clock::now();
 #endif
     // cout << "Merged values" << endl;
@@ -795,7 +795,7 @@ void caf_main(actor_system& system, const config& cfg) {
       blocks_r = blocks;
     });
 #ifdef SHOW_TIME_CONSUMPTION
-    blocks_r.synchronize();
+    dev.synchronize();
     auto t4 = high_resolution_clock::now();
 #endif
     self->send(es1, blocks_r, static_cast<uval>(es_m));
@@ -809,7 +809,7 @@ void caf_main(actor_system& system, const config& cfg) {
       blocks_r = results;
     });
 #ifdef SHOW_TIME_CONSUMPTION
-    blocks_r.synchronize();
+    dev.synchronize();
     auto t5 = high_resolution_clock::now();
 #endif
     // cout << "Count step done." << endl;
@@ -897,7 +897,7 @@ void caf_main(actor_system& system, const config& cfg) {
 #endif // WITH_CPU_TESTS
 
 #ifdef SHOW_TIME_CONSUMPTION
-    chids_r.synchronize();
+    dev.synchronize();
     // cout << "DONE: produce fills." << endl;
     to = high_resolution_clock::now();
     cout << DESCRIPTION("produce_fills:\t\t\t")
@@ -925,7 +925,7 @@ void caf_main(actor_system& system, const config& cfg) {
     es_range_g = spawn_config{dim_vec{round_up(es_groups, es_local_range)}, {},
                               dim_vec{es_local_range}};
 #ifdef SHOW_TIME_CONSUMPTION
-    index_r.synchronize();
+    dev.synchronize();
     auto t12 = high_resolution_clock::now();
 #endif
     self->send(sc_count, ndrange_2k_128, index_r, 2 * k);
@@ -933,7 +933,7 @@ void caf_main(actor_system& system, const config& cfg) {
       blocks_r = blocks;
     });
 #ifdef SHOW_TIME_CONSUMPTION
-    blocks_r.synchronize();
+    dev.synchronize();
     auto t13 = high_resolution_clock::now();
 #endif
     self->send(es1, es_range_h, blocks_r, static_cast<uval>(es_m));
@@ -947,7 +947,7 @@ void caf_main(actor_system& system, const config& cfg) {
       blocks_r = results;
     });
 #ifdef SHOW_TIME_CONSUMPTION
-    blocks_r.synchronize();
+    dev.synchronize();
     auto t14 = high_resolution_clock::now();
 #endif
     self->send(sc_move, ndrange_2k_128, index_r, index_r, blocks_r, 2 * k);
@@ -1037,7 +1037,7 @@ void caf_main(actor_system& system, const config& cfg) {
     //cout << "Lazy scan done." << endl;
 
 #ifdef SHOW_TIME_CONSUMPTION
-    offsets_r.synchronize();
+    dev.synchronize();
     to = high_resolution_clock::now();
     cout << DESCRIPTION("compute_colum_length:\t\t")
          << duration_cast<microseconds>(to - from).count() << " us" << endl;
