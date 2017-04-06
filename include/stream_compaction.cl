@@ -144,7 +144,7 @@ kernel void moveValidElementsStaged(global       uint*          result,
       validBlock[idx] = 0;
     }
     barrier(CLK_LOCAL_MEM_FENCE);
-    uint numValidBlock = compactSIMDPrefixSum(inBlock, validBlock, 
+    uint numValidBlock = compactSIMDPrefixSum(inBlock, validBlock,
                                               compactBlock, dsLocalIndex);
     barrier(CLK_LOCAL_MEM_FENCE);
     if (idx < numValidBlock)
