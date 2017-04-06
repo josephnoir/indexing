@@ -510,7 +510,7 @@ void caf_main(actor_system& system, const config& cfg) {
     // create phases
     // sort rids ...
     auto rids_1 = mngr.spawn_new(prog_rids, "create_rids", ndrange,
-                                 in_out<uval,val,mref>{}, out<uval,mref>{},
+                                 in_out<uval,mref,mref>{}, out<uval,mref>{},
                                  priv<uval>{static_cast<uval>(n)});
     // radix sort (by key)
     auto radix_zero = mngr.spawn_new(prog_radix, "zeroes", zero_range,
@@ -621,15 +621,21 @@ void caf_main(actor_system& system, const config& cfg) {
                               in_out<uval,mref,mref>{},
                               in<uval,mref>{},
                               priv<uval, val>{});
+    scoped_actor self{system};
 #ifdef SHOW_TIME_CONSUMPTION
     auto to = high_resolution_clock::now();
     auto from = high_resolution_clock::now();
 #endif
-
     // kernel executions
-    scoped_actor self{system};
-    self->send(rids_1, values);
-    uref input_r;
+    uref input_r = dev.global_argument(values);
+#ifdef SHOW_TIME_CONSUMPTION
+    dev.synchronize();
+    to = high_resolution_clock::now();
+    cout << DESCRIPTION("Transfer to:\t\t")
+         << duration_cast<microseconds>(to - from).count() << " us" << endl;
+    from = high_resolution_clock::now();
+#endif
+    self->send(rids_1, input_r);
     uref rids_r;
     self->receive([&](uref& in, uref& rids) {
       input_r = move(in);
@@ -713,7 +719,7 @@ void caf_main(actor_system& system, const config& cfg) {
     dev.synchronize();
     //cout << "DONE: sort_rids_by_value" << endl;
     to = high_resolution_clock::now();
-    cout << DESCRIPTION("sort_rids_by_value:\t\t")
+    cout << DESCRIPTION("Sort:\t\t\t")
          << duration_cast<microseconds>(to - from).count() << " us" << endl;
     from = high_resolution_clock::now();
 #endif
@@ -761,7 +767,7 @@ void caf_main(actor_system& system, const config& cfg) {
     dev.synchronize();
     //cout << "DONE: produce_chunk_id_literals" << endl;
     to = high_resolution_clock::now();
-    cout << DESCRIPTION("produce_chunk_id_literals:\t")
+    cout << DESCRIPTION("Chunks + literals:\t")
          << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
@@ -845,7 +851,7 @@ void caf_main(actor_system& system, const config& cfg) {
 #ifdef SHOW_TIME_CONSUMPTION
     // cout << "DONE: merge_lit_by_val_chids." << endl;
     to = high_resolution_clock::now();
-    cout << DESCRIPTION("merge_lit_by_val_chids:\t\t")
+    cout << DESCRIPTION("Merge literals:\t\t")
          << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     cout << " merge headers: " << duration_cast<microseconds>(t2 - t1).count() << endl
          << " merge scan   : " << duration_cast<microseconds>(t3 - t2).count() << endl
@@ -900,7 +906,7 @@ void caf_main(actor_system& system, const config& cfg) {
     dev.synchronize();
     // cout << "DONE: produce fills." << endl;
     to = high_resolution_clock::now();
-    cout << DESCRIPTION("produce_fills:\t\t\t")
+    cout << DESCRIPTION("Produce fills:\t\t")
          << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
@@ -963,7 +969,7 @@ void caf_main(actor_system& system, const config& cfg) {
 #ifdef SHOW_TIME_CONSUMPTION
     //cout << "DONE: fuse_fill_literals." << endl;
     to = high_resolution_clock::now();
-    cout << DESCRIPTION("fuse_fill_literals:\t\t")
+    cout << DESCRIPTION("Fuse:\t\t\t")
          << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     cout << " fuse prep    : " << duration_cast<microseconds>(t12 - t11).count() << endl
          << " sc count     : " << duration_cast<microseconds>(t13 - t12).count() << endl
@@ -1039,7 +1045,7 @@ void caf_main(actor_system& system, const config& cfg) {
 #ifdef SHOW_TIME_CONSUMPTION
     dev.synchronize();
     to = high_resolution_clock::now();
-    cout << DESCRIPTION("compute_colum_length:\t\t")
+    cout << DESCRIPTION("Column length:\t\t")
          << duration_cast<microseconds>(to - from).count() << " us" << endl;
     from = high_resolution_clock::now();
 #endif
@@ -1049,7 +1055,7 @@ void caf_main(actor_system& system, const config& cfg) {
 
 #ifdef SHOW_TIME_CONSUMPTION
     to = high_resolution_clock::now();
-    cout << DESCRIPTION("Reading back data:\t\t")
+    cout << DESCRIPTION("Transfer back:\t\t")
          << duration_cast<microseconds>(to - from).count()<< " us" << endl;
     from = high_resolution_clock::now();
 #endif
@@ -1081,7 +1087,7 @@ void caf_main(actor_system& system, const config& cfg) {
 #endif // WITH_CPU_TESTS
 
     auto stop = high_resolution_clock::now();
-    cout << DESCRIPTION("Total:\t\t\t\t")
+    cout << DESCRIPTION("Total:\t\t\t")
          << duration_cast<microseconds>(stop - start).count() << " us" << endl;
     // Calculated data:
     // index_length --> length of index
