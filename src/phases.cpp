@@ -436,10 +436,7 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // configuration parameters
   auto n = values.size();
-  size_t max_wg_size = dev.get_max_work_group_size();
   auto ndrange = spawn_config{dim_vec{n}};
-  auto ndrange_rounded = spawn_config{dim_vec{round_up(n, max_wg_size)}, {},
-                                      dim_vec{max_wg_size}};
   auto wi = round_up(n, 128ul);
   auto ndrange_128  = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
   // TODO: not a nice solution, need some better appraoch
@@ -462,8 +459,6 @@ void caf_main(actor_system& system, const config& cfg) {
     // calculate number of groups, depending on the group size from the input size
     return (round_up((n + 1) / 2, static_cast<uval>(es_group_size)) / es_group_size);
   };
-  auto get_size = [](const uref& in) -> size_t { return in.size(); };
-
 
   // sort configuration
   // thread block has multiple thread groups has multiple threads
@@ -539,25 +534,9 @@ void caf_main(actor_system& system, const config& cfg) {
                                      priv<radix_config>{rc},
                                      priv<uval,val>{});
     // produce chuncks ...
-    /*
     auto chunks = mngr.spawn_new(prog_chunks, "produce_chunks", ndrange,
                                  in_out<uval,mref,mref>{},
                                  out<uval,mref>{}, out<uval,mref>{});
-    */
-    auto chunks = mngr.spawn_new(prog_chunks, "produce_chunks2",
-                                 ndrange_rounded,
-                                 in_out<uval,mref,mref>{},
-                                 out<uval,mref>{get_size},
-                                 out<uval,mref>{get_size},
-                                 priv<uval>{static_cast<uval>(n)});
-    /*
-    auto chunks = mngr.spawn_new(prog_chunks, "produce_chunks3",
-                                 ndrange_rounded,
-                                 in_out<uval,mref,mref>{},
-                                 out<uval,mref>{get_size},
-                                 out<uval,mref>{get_size},
-                                 priv<uval>{static_cast<uval>(n)});
-    */
     // <uvec, uvec, uvec>
     auto merge_heads = mngr.spawn_new(prog_merge, "create_heads", ndrange,
                                       in_out<uval,mref,mref>{},
