@@ -10,7 +10,7 @@ using namespace caf;
 class config : public actor_system_config {
 public:
   size_t from   =         0;
-  size_t to     = std::numeric_limits<uint32_t>::max();
+  size_t to     = std::numeric_limits<uint16_t>::max();
   size_t amount = 268500000;
   string separator =   "\n";
 
@@ -44,4 +44,3 @@ int main(int argc, char** argv) {
   }
   cout << endl;
 }
-
