@@ -20,7 +20,7 @@
 #include "caf/opencl/mem_ref.hpp"
 #include "caf/opencl/actor_facade_phase.hpp"
 
-//#define WITH_CPU_TESTS
+#define WITH_CPU_TESTS
 #define SHOW_TIME_CONSUMPTION
 #define WITH_DESCRIPTION
 #ifdef WITH_CPU_TESTS
@@ -57,6 +57,7 @@ namespace {
 using uval = uint32_t;
 using uvec = std::vector<uval>;
 using uref = mem_ref<uval>;
+using upair = std::pair<uval,uval>;
 
 using add_atom = atom_constant<atom("add")>;
 using init_atom = atom_constant<atom("init")>;
@@ -165,32 +166,33 @@ string decoded_bitmap(const uvec& bitmap) {
 \*****************************************************************************/
 
 #ifdef WITH_CPU_TESTS
-// in : input
+
+// in : input, rids (rids will be resized and filled with the rids)
 // out: input, rids (both sorted by input)
-void sort_rids_by_value(vector<uint32_t>& input, vector<uint32_t>& rids) {
-  assert(input.size() == rids.size());
+void sort_rids_by_value(vector<uval>& input, vector<uval>& rids) {
+  auto size = input.size();
+  rids.resize(size);
   iota(begin(rids), end(rids), 0);
-  for (size_t i = (input.size() - 1); i > 0; --i) {
-    for (size_t j = 0; j < i; ++j) {
-      if (input[j] > input[j + 1]) {
-        // switch input
-        auto tmp     = input[j];
-        input[j    ] = input[j + 1];
-        input[j + 1] = tmp;
-        // switch rids
-        tmp         = rids[j    ];
-        rids[j    ] = rids[j + 1];
-        rids[j + 1] = tmp;
-      }
+  vector<upair> view;
+  view.reserve(size);
+  for (size_t i = 0; i < size; ++i)
+    view.emplace_back(input[i], rids[i]);
+  std::stable_sort(begin(view), end(view),
+    [](const upair& lhs, const upair& rhs) {
+      return lhs.first < rhs.first;
     }
+  );
+  for (size_t i = 0; i < view.size(); ++i) {
+    input[i] = view[i].first;
+    rids[i] = view[i].second;
   }
 }
 
 // in : rids, n (length)
 // out: chids, lits
-void produce_chunk_id_literals(vector<uint32_t>& rids,
-                                vector<uint32_t>& chids,
-                                vector<uint32_t>& lits) {
+void produce_chunk_id_literals(vector<uval>& rids,
+                                vector<uval>& chids,
+                                vector<uval>& lits) {
   assert(rids.size() == chids.size());
   assert(rids.size() == lits.size());
   for (size_t i = 0; i < rids.size(); ++i) {
@@ -235,21 +237,21 @@ size_t reduce_by_key(vector<T>& input, vector<T>& chids, vector<T>& lits) {
 
 // in : input, chids, lits, n (length)
 // out: input, chids, lits but reduced to length k
-size_t merged_lit_by_val_chids(vector<uint32_t>& input,
-                               vector<uint32_t>& chids,
-                               vector<uint32_t>& lits) {
+size_t merged_lit_by_val_chids(vector<uval>& input,
+                               vector<uval>& chids,
+                               vector<uval>& lits) {
   return reduce_by_key(input, chids, lits);
 }
 
 // in : input, chids, k (reduced length)
 // out: chids with 0-fill symbols
-void produce_fills(vector<uint32_t>& input,
-                   vector<uint32_t>& chids,
+void produce_fills(vector<uval>& input,
+                   vector<uval>& chids,
                    size_t k) {
-  vector<uint32_t> heads(k);
+  vector<uval> heads(k);
   adjacent_difference(begin(input), begin(input) + k, begin(heads));
   heads.front() = 1;
-  vector<uint32_t> new_chids(k);
+  vector<uval> new_chids(k);
   for (size_t i = 0; i < k; ++i) {
     if (heads[i] == 0) {
       new_chids[i] = chids[i] - chids[i - 1] - 1;
@@ -272,9 +274,9 @@ size_t stream_compaction(vector<T>& index, T val = 0) {
 
 // in : chids, lits, k
 // out: index, index_length
-size_t fuse_fill_literals(vector<uint32_t>& chids,
-                          vector<uint32_t>& lits,
-                          vector<uint32_t>& index,
+size_t fuse_fill_literals(vector<uval>& chids,
+                          vector<uval>& lits,
+                          vector<uval>& index,
                           size_t k) {
   assert(chids.size() == k);
   assert(lits.size() == k);
@@ -334,11 +336,11 @@ vector<T> exclusive_scan(const vector<T>& vals) {
 
 // in : chids, input, n
 // out: keycnt, offsets
-size_t compute_colum_length(vector<uint32_t>& input,
-                            vector<uint32_t>& chids,
-                            vector<uint32_t>& offsets,
+size_t compute_colum_length(vector<uval>& input,
+                            vector<uval>& chids,
+                            vector<uval>& offsets,
                             size_t k) {
-  vector<uint32_t> tmp(k);
+  vector<uval> tmp(k);
   for (size_t i = 0; i < k; ++i) {
     tmp[i] = (1 + (chids[i] == 0 ? 0 : 1));
   }
@@ -686,7 +688,7 @@ void caf_main(actor_system& system, const config& cfg) {
           failed_values.push_back(i);
       }
       if (!failed_keys.empty() || !failed_values.empty()) {
-        cout << "failed_keys for "
+        cout << "Sort failed for "
              << failed_keys.size() << " keys and "
              << failed_values.size() << " values." << endl;
         return;
