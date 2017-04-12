@@ -27,16 +27,8 @@ kernel void zeroes(global uint* counters) {
   counters[get_global_id(0)] = 0;
 }
 
-/*
-Start index for threads:
-(block * groups_per_block + (thread / threads_per_group))
-  * elements_per_group 
-  + (thread % threads_per_group)
-
-then, increment by threads_per_group
-*/
-
-inline void prefix_sum(local uint* data, int len, int threads) {
+inline void __attribute__((always_inline))
+prefix_sum(local uint* data, int len, int threads) {
   uint thread = get_local_id(0);
   int inc = 2;
   // reduce
@@ -142,7 +134,6 @@ kernel void reorder(global uint* restrict cell_in,
   const uint group = thread / conf.tpg;
   const uint radix = conf.rpb * block;
   const uint entries = conf.gpb * conf.blocks;
-  const uint rc_offset = radix * entries;
   // Finish phase 2 by combining the sum of each radix
   for (uint i = thread; i < conf.radices; i += conf.tpb) {
     l_prefixes[i] = prefixes[i];
@@ -190,7 +181,6 @@ kernel void reorder_kv(global uint* restrict cell_in,
   const uint group = thread / conf.tpg;
   const uint radix = conf.rpb * block;
   const uint entries = conf.gpb * conf.blocks;
-  const uint rc_offset = radix * entries;
   // Finish phase 2 by combining the sum of each radix
   for (uint i = thread; i < conf.radices; i += conf.tpb) {
     l_prefixes[i] = prefixes[i];
