@@ -21,8 +21,10 @@
  * (There is probably a more efficient solution for segmented scan)
  */
 
-kernel void colum_prepare(global uint* chids, global uint* tmp,
-                          global uint* input, global uint* heads) {
+kernel void colum_prepare(global uint* restrict chids,
+                          global uint* restrict tmp,
+                          global uint* restrict input,
+                          global uint* restrict heads) {
   uint idx = get_global_id(0);
   tmp[idx] = 1 + (chids[idx] != 0);
   // create heads array for next steps
@@ -31,7 +33,8 @@ kernel void colum_prepare(global uint* chids, global uint* tmp,
 
 // somewhat inefficient segmented scan (not really a scan as it stores the
 // accumulated value at the beginning of the segment)
-kernel void lazy_segmented_scan(global uint* heads, global uint* data) {
+kernel void lazy_segmented_scan(global uint* restrict heads,
+                                global uint* restrict data) {
   uint idx = get_global_id(0);
   uint maximum = get_global_size(0);
   if (heads[idx] != 0) {

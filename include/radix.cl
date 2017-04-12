@@ -64,7 +64,8 @@ inline void prefix_sum(local uint* data, int len, int threads) {
 
 // Optimization: count in local memory and copy to global when the
 // block is finished.
-kernel void count(global uint* cell_in, global volatile uint* counters,
+kernel void count(global          uint* restrict cell_in,
+                  global volatile uint* restrict counters,
                   configuration conf, uint offset) {
   const uint thread = get_local_id(0);
   const uint block = get_group_id(0);
@@ -94,8 +95,10 @@ kernel void count(global uint* cell_in, global volatile uint* counters,
   }
 }
 
-kernel void scan(global uint* cell_in, global uint* counters,
-                 global uint* prefixes, local uint* l_counters,
+kernel void scan(global uint* restrict cell_in,
+                 global uint* restrict counters,
+                 global uint* restrict prefixes,
+                 local uint* l_counters,
                  configuration conf, uint offset) {
   const uint thread = get_local_id(0);
   const uint block = get_group_id(0);
@@ -128,8 +131,10 @@ kernel void scan(global uint* cell_in, global uint* counters,
 }
 
 
-kernel void reorder(global uint* cell_in, global uint* cell_out,
-                    global uint* counters, global uint* prefixes,
+kernel void reorder(global uint* restrict cell_in,
+                    global uint* restrict cell_out,
+                    global uint* restrict counters,
+                    global uint* restrict prefixes,
                     local uint* l_counters, local uint* l_prefixes,
                     configuration conf, uint offset) {
   const uint thread = get_local_id(0);
@@ -171,10 +176,14 @@ kernel void reorder(global uint* cell_in, global uint* cell_out,
   }
 }
 
-kernel void reorder_kv(global uint* cell_in, global uint* cell_out,
-                       global uint* value_in, global uint* value_out,
-                       global uint* counters, global uint* prefixes,
-                       local uint* l_counters, local uint* l_prefixes,
+kernel void reorder_kv(global uint* restrict cell_in,
+                       global uint* restrict cell_out,
+                       global uint* restrict value_in,
+                       global uint* restrict value_out,
+                       global uint* restrict counters,
+                       global uint* restrict prefixes,
+                       local uint* l_counters,
+                       local uint* l_prefixes,
                        configuration conf, uint offset) {
   const uint thread = get_local_id(0);
   const uint block = get_group_id(0);

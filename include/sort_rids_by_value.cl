@@ -11,7 +11,8 @@
 
 // Kernels to create rids
 
-kernel void create_rids(global uint* input, global uint* rids,
+kernel void create_rids(global uint* restrict input,
+                        global uint* restrict rids,
                         private uint maximum) {
   uint idx = get_global_id(0);
   if (idx < maximum)
@@ -56,10 +57,10 @@ kernel void create_rids(global uint* input, global uint* rids,
 
 // One thread per record
 // TODO: Find fast algorithm
-kernel void ParallelSelection(global const uint* key_in,
-                              global const uint* val_in,
-                              global uint* key_out,
-                              global uint* val_out) {
+kernel void ParallelSelection(global const uint* restrict key_in,
+                              global const uint* restrict val_in,
+                              global       uint* restrict key_out,
+                              global       uint* restrict val_out) {
   int i = get_global_id(0); // current thread
   int n = get_global_size(0); // input size
   uint iKey = key_in[i];
@@ -77,7 +78,8 @@ kernel void ParallelSelection(global const uint* key_in,
 
 
 // N threads
-kernel void ParallelBitonic_A(global const uint * in, global uint * out,
+kernel void ParallelBitonic_A(global const uint* restrict in,
+                              global       uint* restrict out,
                               int inc, int dir) {
   int i = get_global_id(0); // thread index
   int j = i ^ inc;          // sibling to compare
@@ -97,7 +99,8 @@ kernel void ParallelBitonic_A(global const uint * in, global uint * out,
 }
 
 // N/2 threads
-kernel void ParallelBitonic_B_test(global const uint * in, global uint * out,
+kernel void ParallelBitonic_B_test(global const uint* restrict in,
+                                   global       uint* restrict out,
                                    int inc, int dir) {
   int t   = get_global_id(0); // thread index
   int low = t & (inc - 1);    // low order bits (below INC)
@@ -149,8 +152,9 @@ kernel void ParallelBitonic_B2(global uint * data, int inc, int dir) {
 }
 */
 
-kernel void ParallelBitonic_B2(global uint* config, global uint * keys,
-                               global uint* values) {
+kernel void ParallelBitonic_B2(global uint* restrict config,
+                               global uint* restrict keys,
+                               global uint* restrict values) {
   uint inc     = config[0];        // inc phase parameter
   uint dir     = config[1];        // sort oder 
   int t        = get_global_id(0); // thread index
@@ -177,7 +181,7 @@ kernel void ParallelBitonic_B2(global uint* config, global uint * keys,
 }
 
 // N/4 threads
-kernel void ParallelBitonic_B4(global uint * data, int inc, int dir) {
+kernel void ParallelBitonic_B4(global uint* restrict data, int inc, int dir) {
   inc        >>= 1;
   int t        = get_global_id(0); // thread index
   int low      = t & (inc - 1); // low order bits (below INC)
@@ -233,7 +237,7 @@ kernel void ParallelBitonic_B4(global uint * data, int inc, int dir) {
 }
 
 // N/8 threads
-kernel void ParallelBitonic_B8(global uint * data, int inc, int dir) {
+kernel void ParallelBitonic_B8(global uint* restrict data, int inc, int dir) {
   inc        >>= 2;
   int t        = get_global_id(0);       // thread index
   int low      = t & (inc - 1);          // low order bits (below INC)
@@ -255,7 +259,7 @@ kernel void ParallelBitonic_B8(global uint * data, int inc, int dir) {
 }
 
 // N/16 threads
-kernel void ParallelBitonic_B16(global uint * data, int inc, int dir) {
+kernel void ParallelBitonic_B16(global uint* restrict data, int inc, int dir) {
   inc        >>= 3;
   int t        = get_global_id(0);       // thread index
   int low      = t & (inc - 1);          // low order bits (below INC)

@@ -118,7 +118,7 @@ uint compactSIMDPrefixSum(local const uint* dsData, local const uint* dsValid,
 }
 
 // dgValid and dgData may be the same data if we want to keep eveything != 0
-kernel void moveValidElementsStaged(global       uint*          result,
+kernel void moveValidElementsStaged(global       uint* restrict result,
                                     global const uint*          dgData,
                                     global       uint* restrict dgCompact,
                                     global const uint*          dgValid,

@@ -19,8 +19,9 @@
  * (There is probably a more efficient solution for segmented scan)
  */
 
-kernel void create_heads(global uint* keys_high, global uint* keys_low,
-                         global uint* heads) {
+kernel void create_heads(global uint* restrict keys_high,
+                         global uint* restrict keys_low,
+                         global uint* restrict heads) {
   uint idx = get_global_id(0);
   heads[idx] = (idx == 0) ||
                (keys_high[idx] != keys_high[idx - 1]) ||
@@ -39,7 +40,8 @@ kernel void create_heads(global uint* keys_high, global uint* keys_low,
 
 // somewhat inefficient segmented scan (not really a scan as it stores the
 // accumulated value at the beginning of the segment)
-kernel void lazy_segmented_scan(global uint* heads, global uint* data) {
+kernel void lazy_segmented_scan(global uint* restrict heads,
+                                global uint* restrict data) {
   uint idx = get_global_id(0);
   uint maximum = get_global_size(0);
   if (heads[idx] != 0) {

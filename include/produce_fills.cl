@@ -11,8 +11,10 @@
  *                    size_t li, size_t work_size);
  */
 
-kernel void produce_fills(global uint* input, global uint* chids,
-                          global uint* output, private uint k) {
+kernel void produce_fills(global uint* restrict input,
+                          global uint* restrict chids,
+                          global uint* restrict output,
+                          private uint k) {
   uint idx = get_global_id(0);
   if (idx < k) {
     output[idx] = (idx != 0 && input[idx] == input[idx - 1])
