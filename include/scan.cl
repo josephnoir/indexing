@@ -230,8 +230,6 @@ kernel void es_phase_3(global uint* restrict data,
   const uint threads_per_block = get_local_size(0);
   const uint elements_per_block = threads_per_block * 2;
   const uint global_offset = block * elements_per_block;
-  const uint n = elements_per_block;
-  const uint index = global_offset + thread;
 
   // add the appropriate value to each block
   uint ai = 2 * thread;
