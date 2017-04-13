@@ -117,7 +117,7 @@ uint compactSIMDPrefixSum(local const uint* dsData, local const uint* dsValid,
   return numValid;
 }
 
-// dgValid and dgData may be the same data if we want to keep eveything != 0
+// dgValid and dgData may be the same data if we want to keep everything != 0
 kernel void moveValidElementsStaged(global       uint* restrict result,
                                     global const uint*          dgData,
                                     global       uint* restrict dgCompact,
@@ -133,6 +133,18 @@ kernel void moveValidElementsStaged(global       uint* restrict result,
   uint lsize = get_local_size(0);
   local uint dsLocalIndex[256];
   uint blockOutOffset = 0;
+  // for (uint base = 0; base < gidx; base += lsize) {
+  //   // Load up the count of valid elements for each block before us
+  //   // in batches of 128
+  //   if ((base + idx) < gidx)
+  //     validBlock[idx] = dgBlockCounts[base + idx];
+  //   else
+  //     validBlock[idx] = 0;
+  //   barrier(CLK_LOCAL_MEM_FENCE);
+  //   // Parallel reduce these counts, accumulate in the final offset variable
+  //   blockOutOffset += sumReduce128(validBlock);
+  //   barrier(CLK_LOCAL_MEM_FENCE);
+  // }
   blockOutOffset = dgBlockCounts[gidx];
   const uint epb = len / ngrps + ((len % ngrps) ? 1 : 0);
   const uint ub = (len < (gidx + 1) * epb) ? len : ((gidx + 1) * epb);
@@ -154,4 +166,3 @@ kernel void moveValidElementsStaged(global       uint* restrict result,
   if (gidx == (ngrps - 1) && idx == 0)
     result[0] = blockOutOffset;
 }
-

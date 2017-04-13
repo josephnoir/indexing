@@ -441,8 +441,8 @@ void caf_main(actor_system& system, const config& cfg) {
   auto ndrange = spawn_config{dim_vec{n}};
   auto wi = round_up(n, 128ul);
   auto ndrange_128  = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
-  // TODO: not a nice solution, need some better appraoch
-  auto wi_two = [&](uvec&, uref&) { return size_t{wi / 128}; };
+  // TODO: not a nice solution, need some better approach
+  auto wi_two = [&](uref&, uval&) { return size_t{wi / 128}; };
   auto k_once = [](uref&, uref&, uref&, uval k) { return size_t{k}; };
   auto one = [](uref&, uref&, uref&, uval) { return size_t{1}; };
   auto k_double = [](uref&, uref&, uval k) { return size_t{2 * k}; };
@@ -453,13 +453,15 @@ void caf_main(actor_system& system, const config& cfg) {
   size_t es_global_range = round_up((es_m + 1) / 2, es_group_size);
   size_t es_local_range = es_group_size;
   size_t es_groups = (es_global_range / es_local_range);
+  size_t es_groups_rounded = round_up(es_groups, 128ul);
   auto es_range_h = spawn_config{dim_vec{es_global_range}, {},
                                  dim_vec{es_local_range}};
-  auto es_range_g = spawn_config{dim_vec{round_up(es_groups, es_local_range)},
-                                 {}, dim_vec{es_local_range}};
-  auto es_incs = [&](const uvec&, uval n) -> size_t {
+  auto es_range_g = spawn_config{dim_vec{es_groups_rounded}, {},
+                                 dim_vec{es_groups_rounded / 2}};
+  auto es_incs = [&](const uref&, uval n) -> size_t {
     // calculate number of groups, depending on the group size from the input size
-    return (round_up((n + 1) / 2, static_cast<uval>(es_group_size)) / es_group_size);
+    return (round_up((n + 1) / 2,
+            static_cast<uval>(es_group_size)) / es_group_size);
   };
 
   // sort configuration
@@ -596,7 +598,6 @@ void caf_main(actor_system& system, const config& cfg) {
     auto es2 = mngr.spawn_new(prog_es, "es_phase_2", es_range_g,
                               in_out<uval,mref,mref>{},
                               in_out<uval,mref,mref>{},
-                              local<uval>{es_group_size * 2},
                               priv<uval, val>{});
     auto es3 = mngr.spawn_new(prog_es, "es_phase_3", es_range_h,
                               in_out<uval,mref,mref>{},
@@ -860,22 +861,40 @@ void caf_main(actor_system& system, const config& cfg) {
     size_t index_length = 0;
     self->send(fuse_prep, spawn_config{dim_vec{k}}, chids_r, lits_r, k);
     self->receive([&](uref& index) { index_r = index; });
-    auto idx_e = index_r.data();
-    // cout << "Prepared index." << endl;
     wi = round_up(2 * k, 128u);
-    auto ndrange_2k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
     // new calculactions for scan
     es_m = wi / 128;
     es_global_range = round_up((es_m + 1) / 2, es_group_size);
     es_groups = (es_global_range / es_local_range);
+    es_groups_rounded = round_up(es_groups, 128ul);
     es_range_h = spawn_config{dim_vec{es_global_range}, {},
                               dim_vec{es_local_range}};
-    es_range_g = spawn_config{dim_vec{round_up(es_groups, es_local_range)}, {},
-                              dim_vec{es_local_range}};
+    es_range_g = spawn_config{dim_vec{es_groups_rounded}, {},
+                              dim_vec{es_groups_rounded / 2}};
+    auto ndrange_2k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
+    // auto expected_data = index_r.data();
+    // auto data = *expected_data;
+    // cout << "Now performing sc on data:" << endl;
+    // for (auto val : data)
+    //   cout << val << endl;
+    // cout << "Config:" << endl;
+    // cout << "wi:          " << wi << endl
+    //      << "Count range: [" << wi << "], [" << 128 << "]" << endl
+    //      << "k:           " << k << endl
+    //      << "es range h:  [" << es_global_range << "], [" 
+    //                          << es_local_range << "]" << endl
+    //      << "es range g:  [" << round_up(es_groups, es_local_range) << "], ["
+    //                          << es_local_range << "]" << endl;
     self->send(sc_count, ndrange_2k_128, index_r, 2 * k);
     self->receive([&](uref& blocks, uref&) {
       blocks_r = blocks;
     });
+    // cout << "Blocks to scan for sc: " << blocks_r.size() << ":" << endl;
+    // auto expected_data = blocks_r.data();
+    // auto data = *expected_data;
+    // for (auto val : data)
+    //   cout << val << endl;
+    // return;
     self->send(es1, es_range_h, blocks_r, static_cast<uval>(es_m));
     self->receive([&](uref& data, uref& increments) {
       self->send(es2, es_range_g, data, increments, static_cast<uval>(es_groups));
@@ -929,10 +948,11 @@ void caf_main(actor_system& system, const config& cfg) {
     es_m = wi / 128;
     es_global_range = round_up((es_m + 1) / 2, es_group_size);
     es_groups = (es_global_range / es_local_range);
+    es_groups_rounded = round_up(es_groups, 128ul);
     es_range_h = spawn_config{dim_vec{es_global_range}, {},
                               dim_vec{es_local_range}};
-    es_range_g = spawn_config{dim_vec{round_up(es_groups, es_local_range)}, {},
-                              dim_vec{es_local_range}};
+    es_range_g = spawn_config{dim_vec{es_groups_rounded}, {},
+                              dim_vec{es_groups_rounded / 2}};
     // stream compaction
     self->send(sc_count, ndrange_k_128, heads_r, k);
     self->receive([&](uref& blocks, uref& heads) {
@@ -993,6 +1013,8 @@ void caf_main(actor_system& system, const config& cfg) {
     uvec test_chids_fuse{test_chids_produce};
     auto test_index_length = fuse_fill_literals(test_chids_fuse, test_lits,
                                                 test_index, test_k);
+    cout << "Got index length " << index_length << ", test calculated "
+         << test_index_length << "." << endl;
     valid_or_exit(test_index_length == index_length, "Index lengths don't match");
     valid_or_exit(index == test_index, "Indexes differ.");
     // create test offsets
