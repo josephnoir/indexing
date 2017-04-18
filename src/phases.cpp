@@ -447,6 +447,7 @@ void caf_main(actor_system& system, const config& cfg) {
   auto one = [](uref&, uref&, uref&, uval) { return size_t{1}; };
   auto k_double = [](uref&, uref&, uval k) { return size_t{2 * k}; };
   auto k_two = [](uref&, uval k) { return size_t{k}; };
+  auto fills_k = [](uref&, uref&, uval k) { return size_t{k}; };
   // exclusive scan
   auto es_m = wi / 128;
   size_t es_group_size = 128;
@@ -570,7 +571,8 @@ void caf_main(actor_system& system, const config& cfg) {
     // produce fills
     auto fills = mngr.spawn_new(prog_fills, "produce_fills", ndrange,
                                 in<uval,mref>{},in<uval,mref>{},
-                                out<uval,mref>{},priv<uval,val>{});
+                                out<uval,mref>{fills_k},
+                                priv<uval,val>{});
     // fuse fill & literals
     auto fuse_prep = mngr.spawn_new(prog_fuse, "prepare_index", ndrange,
                                     in<uval,mref>{},in<uval,mref>{},
@@ -830,7 +832,7 @@ void caf_main(actor_system& system, const config& cfg) {
     valid_or_exit(new_lits == test_lits, POSITION + " lits not equal");
 #endif // WITH_CPU_TESTS
 
-    self->send(fills, spawn_config{dim_vec{k}}, input_r, chids_r, k);
+    self->send(fills, spawn_config{dim_vec{(k + 1) / 2}}, input_r, chids_r, k);
     self->receive([&](uref& out) { chids_r.swap(out); });
 
 #ifdef WITH_CPU_TESTS
