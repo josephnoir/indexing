@@ -61,7 +61,7 @@ kernel void upsweep(global uint* restrict data,
 /// Global exclusive scan, phase 2.
 kernel void block_scan(global uint* restrict data,
                        global uint* restrict heads,
-                       //global uint* restrict tree,
+                       global uint* restrict tree,
                        uint len) {
   local uint tmp_data[2048];
   local uint tmp_heads[2048];
@@ -86,7 +86,7 @@ kernel void block_scan(global uint* restrict data,
       // ... before changing it!
       tmp_heads[bi] |= tmp_heads[ai];
     }
-    offset *= 2;
+    offset <<= 1;
   }
   if (thread == 0) {
     tmp_data[n - 1] = 0;
@@ -103,7 +103,7 @@ kernel void block_scan(global uint* restrict data,
       uint old = tmp_data[bi]; // TODO: delete this
       tmp_data[ai] = tmp_data[bi];
       // modified for segmented scan
-      if (heads[next] == 1) // what if next >= len
+      if (tree[next] == 1) // what if next >= len
         tmp_data[bi] = 0;
       else if (tmp_heads[ai] == 1)
         tmp_data[bi] = t;
