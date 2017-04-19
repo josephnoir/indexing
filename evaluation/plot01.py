@@ -66,7 +66,7 @@ handles, labels = p.get_legend_handles_labels()
 plt.legend(handles, labels, loc='upper center', bbox_to_anchor=(0.5,-1.5), frameon=False, shadow=False, ncol=4)
 
 plSize = plt.gcf()
-print(plSize)
+#print(plSize)
 
 plt.xlabel('Time [ms]')
 plt.title(filename.replace('.txt', ''))
