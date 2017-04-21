@@ -175,9 +175,9 @@ void caf_main(actor_system& system, const config& cfg) {
   }
 
   // --- scope to ensure actor cleanup ---
+  auto dev = *opt;
   {
     // ---- general ----
-    auto dev = *opt;
     auto prog = mngr.create_program_from_file("./include/segmented_scan.cl",
                                               "", dev);
     // ---- input parameters ----
@@ -205,7 +205,7 @@ void caf_main(actor_system& system, const config& cfg) {
     //                              dim_vec{local_range}};
     auto ndr_block = spawn_config{dim_vec{round_up(groups, local_range)}, {},
                                   dim_vec{local_range}};
-
+    auto ndr_downsweep = ndr_upsweep;
     // ---- functions for arguments ----
     auto incs = [&](const uvec&, const uvec&, uval n) -> size_t {
       // calculate number of groups,
@@ -227,21 +227,22 @@ void caf_main(actor_system& system, const config& cfg) {
                                  local<uval>{group_size * 2},  // heads buffer
                                  priv<uval, val>{});
     auto phase2 = mngr.spawn_new(prog, "block_scan", ndr_block, // length / 2 work items
-                                 in_out<uval,mref,mref>{},     // increments
-                                 in_out<uval,mref,mref>{},     // increments heads
-                                 in_out<uval,mref,mref>{},     // tree
+                                 in_out<uval,mref,mref>{},      // increments
+                                 in_out<uval,mref,mref>{},      // increments heads
+                                 in_out<uval,mref,mref>{},      // tree
                                  priv<uval, val>{});            // length
-    /*
-    auto phase3 = mngr.spawn_new(prog, "downsweep", ndrange_h,
-                                 in_out<uval,mref,mref>{},     // data
+    auto phase3 = mngr.spawn_new(prog, "downsweep", ndr_downsweep,
+                                 in_out<uval,mref,val>{},      // data
                                  in<uval,mref>{},              // heads
                                  in<uval,mref>{},              // increments
                                  in<uval,mref>{},              // increment heads
+                                 in<uval,mref>{},              // tree
+                                 local<uval>{group_size * 2},  // data buffer
+                                 local<uval>{group_size * 2},  // heads buffer
                                  priv<uval, val>{});
-    */
 
     // ---- test data ----
-    // TODO: ...
+    auto scanned = segmented_exclusive_scan(values, heads);
 
     // ---- computations -----
     scoped_actor self{system};
@@ -254,14 +255,26 @@ void caf_main(actor_system& system, const config& cfg) {
       self->send(phase2, incs, inc_heads, tree, static_cast<uval>(groups));
     });
     self->receive([&](uref& incs, uref& inc_heads, uref& tree) {
-      //self->send(phase3, data, increments, n);
+      self->send(phase3, d, h, incs, inc_heads, tree, static_cast<uval>(n));
     });
-    /*
     self->receive([&](const uvec& results) {
-      
+      if (results != scanned) {
+        cout << "Expected different result" << endl;
+        for (size_t i = 0; i < results.size(); ++i) {
+          //if (scanned[i] != results[i]) {
+            cout << "[" << setw(3) << i << "] " 
+                 << setw(3) << values[i] << " + " << setw(1) << heads[i]
+                 << " >> "
+                 << setw(3) << scanned[i] << " : " << setw(3) << results[i]
+                 << endl;
+          //}
+        }
+      } else {
+        cout << "Success" << endl;
+      }
     });
-    */
     /*
+    // This just tested a block-level segmented scan, i.e., phase 2
     self->send(phase2, values, heads, heads, static_cast<uval>(n));
     auto scanned = segmented_exclusive_scan(values, heads);
     self->receive([&](uvec& data, uvec&, uvec&) {

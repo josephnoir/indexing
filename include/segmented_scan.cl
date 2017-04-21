@@ -146,6 +146,7 @@ kernel void downsweep(global uint* restrict data,
   tmp_data[odd] = (odd < len) ? data[global_offset + (odd)] : 0;
   tmp_heads[even] = (even < len) ? heads[global_offset + (even)] : 0;
   tmp_heads[odd] = (odd < len) ? heads[global_offset + (odd)] : 0;
+  // TODO: Add stuff to the n - 1 or something?
   // traverse down tree & build scan
   for (uint d = 1; d < n; d *= 2) {
     offset >>= 1;
