@@ -16,8 +16,8 @@
 #include <unordered_map>
 
 #include "caf/all.hpp"
+
 #include "caf/opencl/all.hpp"
-#include "caf/opencl/mem_ref.hpp"
 
 #define WITH_CPU_TESTS
 #define SHOW_TIME_CONSUMPTION
@@ -407,13 +407,13 @@ void caf_main(actor_system& system, const config& cfg) {
   auto& mngr = system.opencl_manager();
 
   // get device
-  auto opt = mngr.get_device_if([&](const device& dev) {
+  auto opt = mngr.get_device_if([&](const device_ptr dev) {
       if (cfg.device_name.empty())
         return true;
-      return dev.get_name() == cfg.device_name;
+      return dev->get_name() == cfg.device_name;
   });
   if (!opt) {
-    opt = mngr.get_device_if([&](const device&) { return true; });
+    opt = mngr.get_device_if([&](const device_ptr) { return true; });
     if (!opt) {
       cout << "No device found." << endl;
       return;
@@ -476,9 +476,9 @@ void caf_main(actor_system& system, const config& cfg) {
   uint32_t l_val = 4; // bits used as a bucket in each radix iteration
   uint32_t radices = 1 << l_val;
   uint32_t blocks
-    = (dev.get_max_compute_units() <= (radices / 2)) ? (radices / 2) : radices;
+    = (dev->get_max_compute_units() <= (radices / 2)) ? (radices / 2) : radices;
   uint32_t threads_per_block
-    = max(radices, static_cast<uint32_t>(dev.get_max_work_group_size()));
+    = max(radices, static_cast<uint32_t>(dev->get_max_work_group_size()));
   uint32_t threads_per_group = threads_per_block / radices;
   uint32_t groups_per_block = threads_per_block / threads_per_group;
   uint32_t mask = (1 << l_val) - 1;
@@ -612,7 +612,7 @@ void caf_main(actor_system& system, const config& cfg) {
     auto from = high_resolution_clock::now();
 #endif
     // kernel executions
-    uref input_r = dev.global_argument(values);
+    uref input_r = dev->global_argument(values);
 #ifdef SHOW_TIME_CONSUMPTION
     dev.synchronize();
     to = high_resolution_clock::now();
@@ -639,11 +639,11 @@ void caf_main(actor_system& system, const config& cfg) {
       // radix sort for values by key using inpt as keys and temp as values
       auto r_keys_in = input_r;
       auto r_values_in = rids_r;
-      auto r_keys_out = dev.scratch_argument<uval>(n, buffer_type::input_output);
-      auto r_values_out = dev.scratch_argument<uval>(n, buffer_type::input_output);
+      auto r_keys_out = dev->scratch_argument<uval>(n, buffer_type::input_output);
+      auto r_values_out = dev->scratch_argument<uval>(n, buffer_type::input_output);
       // TODO: see how performance is affected if we create new arrays each time
-      auto r_counters = dev.scratch_argument<uval>(counters);
-      auto r_prefixes = dev.scratch_argument<uval>(prefixes);
+      auto r_counters = dev->scratch_argument<uval>(counters);
+      auto r_prefixes = dev->scratch_argument<uval>(prefixes);
       uint32_t iterations = cardinality / l_val;
       for (uint32_t i = 0; i < iterations; ++i) {
         uval offset = l_val * i;
@@ -789,19 +789,19 @@ void caf_main(actor_system& system, const config& cfg) {
     self->send(sc_move, input_r, heads_r, blocks_r, len);
     self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
       k = res[0];
-      input_r.swap(out);
+      std::swap(input_r, out);
     });
     //cout << "Merge step done (input)." << endl;
     self->send(sc_move, chids_r, heads_r, blocks_r, len);
     self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
       k = res[0];
-      chids_r.swap(out);
+      std::swap(chids_r, out);
     });
     // cout << "Merge step done (chids)." << endl;
     self->send(sc_move, lits_r, heads_r, blocks_r, len);
     self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
       k = res[0];
-      lits_r.swap(out);
+      std::swap(lits_r, out);
     });
     // cout << "Merge step done (lits)." << endl;
 
@@ -834,7 +834,7 @@ void caf_main(actor_system& system, const config& cfg) {
 #endif // WITH_CPU_TESTS
 
     self->send(fills, spawn_config{dim_vec{(k + 1) / 2}}, input_r, chids_r, k);
-    self->receive([&](uref& out) { chids_r.swap(out); });
+    self->receive([&](uref& out) { std::swap(chids_r, out); });
 
 #ifdef WITH_CPU_TESTS
     uvec test_chids_produce{test_chids};
@@ -946,7 +946,7 @@ void caf_main(actor_system& system, const config& cfg) {
     wi = round_up(k, 128u);
     uval keycount = 0;
     auto ndrange_k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
-    auto out_ref = dev.scratch_argument<uval>(k, buffer_type::output);
+    auto out_ref = dev->scratch_argument<uval>(k, buffer_type::output);
     // new calculations for scan actors
     es_m = wi / 128;
     es_global_range = round_up((es_m + 1) / 2, es_group_size);

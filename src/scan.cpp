@@ -18,8 +18,6 @@
 
 #include "caf/all.hpp"
 #include "caf/opencl/all.hpp"
-#include "caf/opencl/mem_ref.hpp"
-#include "caf/opencl/actor_facade_phase.hpp"
 
 using namespace std;
 using namespace std::chrono;
@@ -161,16 +159,16 @@ void caf_main(actor_system& system, const config& cfg) {
   // get OpenCL manager instance
   auto& mngr = system.opencl_manager();
   // get device
-  auto opt = mngr.get_device_if([&](const device& dev) {
+  auto opt = mngr.get_device_if([&](const device_ptr dev) {
       if (cfg.device_name.empty())
         return true;
-      return dev.get_name() == cfg.device_name;
+      return dev->get_name() == cfg.device_name;
   });
   if (!opt) {
     cerr << "Device " << cfg.device_name << " not found." << endl;
     return;
   } else {
-    cout << "Using device named '" << opt->get_name() << "'." << endl;
+    cout << "Using device named '" << (*opt)->get_name() << "'." << endl;
   }
   auto dev = *opt;
   {

@@ -18,7 +18,6 @@
 #include "caf/all.hpp"
 #include "caf/opencl/all.hpp"
 #include "caf/opencl/mem_ref.hpp"
-#include "caf/opencl/actor_facade_phase.hpp"
 
 using namespace std;
 using namespace std::chrono;
@@ -111,8 +110,8 @@ public:
                                     MAIN!
 \*****************************************************************************/
 
-void caf_main(actor_system& system, const config& cfg) {
-
+void caf_main(actor_system& system, const config& /*cfg*/) {
+  /*
   auto& mngr = system.opencl_manager();
 
   // get device
@@ -176,12 +175,11 @@ void caf_main(actor_system& system, const config& cfg) {
     cout << amount << " of " << cfg.iterations << " values were above " << threshold << endl;
     //auto stop = high_resolution_clock::now();
     // TODO check if microseconds are good enough or if we should use nanoseconds instead
-    /*
-    cout << "Time: '"
-         << duration_cast<microseconds>(stop - start).count()
-         << "' us" << endl;
-    */
+    //cout << "Time: '"
+    //     << duration_cast<microseconds>(stop - start).count()
+    //     << "' us" << endl;
   }
+  */
   // clean up
   system.await_all_actors_done();
 }

@@ -18,8 +18,6 @@
 
 #include "caf/all.hpp"
 #include "caf/opencl/all.hpp"
-#include "caf/opencl/mem_ref.hpp"
-#include "caf/opencl/actor_facade_phase.hpp"
 
 using namespace std;
 using namespace std::chrono;
@@ -160,26 +158,28 @@ void caf_main(actor_system& system, const config& cfg) {
   }
   // ---- get device ----
   auto& mngr = system.opencl_manager();
-  auto opt = mngr.get_device_if([&](const device& dev) {
+  auto opt = mngr.get_device_if([&](const device_ptr dev) {
       if (cfg.device_name.empty())
         return true;
-      return dev.get_name() == cfg.device_name;
+      return dev->get_name() == cfg.device_name;
   });
   if (!opt) {
-    opt = mngr.get_device_if([&](const device&) { return true; });
+    opt = mngr.get_device_if([&](const device_ptr) { return true; });
     if (!opt) {
       cout << "No device found." << endl;
       return;
     }
-    cerr << "Using device '" << opt->get_name() << "'." << endl;
+    cerr << "Using device '" << (*opt)->get_name() << "'." << endl;
   }
 
-  // --- scope to ensure actor cleanup ---
-  auto dev = *opt;
-  {
-    // ---- general ----
-    auto prog = mngr.create_program_from_file("./include/segmented_scan.cl",
+  // ---- general ----
+  auto dev = move(*opt);
+  dev->queue_count();
+  auto prog = mngr.create_program_from_file("./include/segmented_scan.cl",
                                               "", dev);
+  dev->queue_count();
+  // --- scope to ensure actor cleanup ---
+  {
     // ---- input parameters ----
     size_t n = values.size();
     size_t group_size = 4;
@@ -291,6 +291,7 @@ void caf_main(actor_system& system, const config& cfg) {
     });
     */
   }
+  dev->queue_count();
 
   // ---- DONE ----
   system.await_all_actors_done();
