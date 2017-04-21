@@ -18,7 +18,6 @@
 #include "caf/all.hpp"
 #include "caf/opencl/all.hpp"
 #include "caf/opencl/mem_ref.hpp"
-#include "caf/opencl/actor_facade_phase.hpp"
 
 #define WITH_CPU_TESTS
 #define SHOW_TIME_CONSUMPTION
@@ -365,15 +364,15 @@ public:
   string filename = "";
   uval bound = 0;
   int loops = 1;
-  string device_name = "GeForce GTX 780M";
+  string device_name = "GeForce GT 650M";
   bool print_results;
   config() {
     load<opencl::manager>();
     opt_group{custom_options_, "global"}
     .add(filename, "data-file,f", "file with test data (one value per line)")
     .add(bound, "bound,b", "maximum value (0 will scan values)")
-    .add(device_name, "device,d", "device for computation (GeForce GTX 780M, "
-                      "empty string will take first available device)")
+    .add(device_name, "device,d", "device for computation (GeForce GT 650M, "
+                      ", but will take first available device if not found)")
     .add(print_results, "print,p", "print resulting bitmap index");
   }
 };
@@ -414,11 +413,13 @@ void caf_main(actor_system& system, const config& cfg) {
       return dev.get_name() == cfg.device_name;
   });
   if (!opt) {
-    cerr << "Device " << cfg.device_name << " not found." << endl;
-    return;
-  } /*else {
-    cout << "Using device named '" << opt->get_sizeame() << "'." << endl;
-  }*/
+    opt = mngr.get_device_if([&](const device&) { return true; });
+    if (!opt) {
+      cout << "No device found." << endl;
+      return;
+    }
+    //cerr << "Using device '" << opt->get_name() << "'." << endl;
+  }
   auto dev = *opt;
 
 #ifdef WITH_CPU_TESTS
