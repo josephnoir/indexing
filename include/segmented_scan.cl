@@ -19,6 +19,7 @@ kernel void upsweep(global uint* restrict data,
   const uint elements_per_block = threads_per_block * 2;
   const uint global_offset = block * elements_per_block;
   const uint n = elements_per_block;
+  printf("thread %d in block %d\n", thread, block);
 
   uint offset = 1;
   uint even = 2 * thread;
@@ -41,13 +42,6 @@ kernel void upsweep(global uint* restrict data,
     }
     offset <<= 1; // offset *= 2;
   }
-  if (thread == 0) {
-    // TODO: modification for segmented scan
-    increments[block] = tmp_data[n - 1];
-    increment_heads[block] = tmp_heads[n - 1];
-    tree[block] = tmp_heads[n - 1];
-    tmp_data[n - 1] = 0;
-  }
   if (even < len) {
     data[global_offset + even] = tmp_data[even];
     heads[global_offset + even] = tmp_heads[even];
@@ -56,6 +50,12 @@ kernel void upsweep(global uint* restrict data,
     data[global_offset + odd] = tmp_data[odd];
     heads[global_offset + odd] = tmp_heads[odd];
   }
+  if (thread == 0) {
+    increments[block] = tmp_data[n - 1];
+    increment_heads[block] = tmp_heads[n - 1];
+    tree[block] = tmp_heads[0];
+    // tmp_data[n - 1] = 0;
+  }
 }
 
 /// Global exclusive scan, phase 2.
@@ -63,6 +63,7 @@ kernel void block_scan(global uint* restrict data,
                        global uint* restrict heads,
                        global uint* restrict tree,
                        uint len) {
+  /*
   local uint tmp_data[2048];
   local uint tmp_heads[2048];
   const uint thread = get_local_id(0);
@@ -121,6 +122,7 @@ kernel void block_scan(global uint* restrict data,
     data[odd] = tmp_data[odd];
     heads[odd] = tmp_heads[odd];
   }
+  */
 }
 
 // Global segmented scan phase 3.
@@ -146,8 +148,18 @@ kernel void downsweep(global uint* restrict data,
   tmp_data[odd] = (odd < len) ? data[global_offset + (odd)] : 0;
   tmp_heads[even] = (even < len) ? heads[global_offset + (even)] : 0;
   tmp_heads[odd] = (odd < len) ? heads[global_offset + (odd)] : 0;
-  // TODO: Add stuff to the n - 1 or something?
+  barrier(CLK_LOCAL_MEM_FENCE);
+  if (thread == 0) {
+    printf("Writing %d / %d to %d\n", increments[block], increment_heads[block], (n - 1));
+    tmp_data[n - 1] = increments[block];
+    tmp_heads[n - 1] = increment_heads[block];
+  }
+  barrier(CLK_LOCAL_MEM_FENCE);
+  // probably always the <= power of two
+  for (uint d = n >> 1; d > 0; d >>= 1)
+    offset <<= 1;
   // traverse down tree & build scan
+  printf("offset is %d, n is %d\n", offset, n);
   for (uint d = 1; d < n; d *= 2) {
     offset >>= 1;
     barrier(CLK_LOCAL_MEM_FENCE);

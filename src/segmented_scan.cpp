@@ -174,10 +174,8 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // ---- general ----
   auto dev = move(*opt);
-  dev->queue_count();
   auto prog = mngr.create_program_from_file("./include/segmented_scan.cl",
                                               "", dev);
-  dev->queue_count();
   // --- scope to ensure actor cleanup ---
   {
     // ---- input parameters ----
@@ -248,13 +246,27 @@ void caf_main(actor_system& system, const config& cfg) {
     scoped_actor self{system};
     uref d, h;
     self->send(phase1, values, heads, static_cast<uval>(n));
-    self->receive([&](uref& data, uref& heads, uref& incs, 
+    self->receive([&](uref& data, uref& heads, uref& incs,
                       uref& inc_heads, uref& tree) {
       d = data;
       h = heads;
+      cout << "before" << endl;
+      auto ie = incs.data();
+      auto ihe = inc_heads.data();
+      auto te = tree.data();
+      for (size_t i = 0; i < ie->size(); ++i) {
+        cout << ie->at(i) << " : " << ihe->at(i) << " : " << te->at(i) << endl;
+      }
       self->send(phase2, incs, inc_heads, tree, static_cast<uval>(groups));
     });
     self->receive([&](uref& incs, uref& inc_heads, uref& tree) {
+      cout << "after" << endl;
+      auto ie = incs.data();
+      auto ihe = inc_heads.data();
+      auto te = tree.data();
+      for (size_t i = 0; i < ie->size(); ++i) {
+        cout << ie->at(i) << " : " << ihe->at(i) << " : " << te->at(i) << endl;
+      }
       self->send(phase3, d, h, incs, inc_heads, tree, static_cast<uval>(n));
     });
     self->receive([&](const uvec& results) {
@@ -262,7 +274,7 @@ void caf_main(actor_system& system, const config& cfg) {
         cout << "Expected different result" << endl;
         for (size_t i = 0; i < results.size(); ++i) {
           //if (scanned[i] != results[i]) {
-            cout << "[" << setw(3) << i << "] " 
+            cout << "[" << setw(3) << i << "] "
                  << setw(3) << values[i] << " + " << setw(1) << heads[i]
                  << " >> "
                  << setw(3) << scanned[i] << " : " << setw(3) << results[i]
