@@ -201,8 +201,9 @@ void caf_main(actor_system& system, const config& cfg) {
                                     dim_vec{local_range}};
     //auto ndrange_g = spawn_config{dim_vec{round_up(groups, local_range)}, {},
     //                              dim_vec{local_range}};
-    auto ndr_block = spawn_config{dim_vec{round_up(groups, local_range)}, {},
-                                  dim_vec{local_range}};
+    //auto ndr_block = spawn_config{dim_vec{round_up(groups, local_range)}, {},
+    //                              dim_vec{local_range}};
+    auto ndr_block = spawn_config{dim_vec{1024}, {}, dim_vec{512}};
     auto ndr_downsweep = ndr_upsweep;
     // ---- functions for arguments ----
     auto incs = [&](const uvec&, const uvec&, uval n) -> size_t {
@@ -213,6 +214,7 @@ void caf_main(actor_system& system, const config& cfg) {
       //cout << "inc is " << res << endl;
       return res;
     };
+    auto ndr_standalone = spawn_config{dim_vec{1024}, {}, dim_vec{512}};
 
     // ---- actors ----
     auto phase1 = mngr.spawn_new(prog, "upsweep", ndr_upsweep,
@@ -237,8 +239,13 @@ void caf_main(actor_system& system, const config& cfg) {
                                  in<uval,mref>{},              // tree
                                  local<uval>{group_size * 2},  // data buffer
                                  local<uval>{group_size * 2},  // heads buffer
+                                 local<uval>{group_size * 2},  // tree buffer
                                  priv<uval, val>{});
-
+  auto block = mngr.spawn_new(prog, "block_scan", ndr_block, // length / 2 work items
+                              in_out<uval,val,val>{},        // increments
+                              in_out<uval,val,val>{},        // increments heads
+                              in_out<uval,val,val>{},        // tree
+                              priv<uval, val>{});            // length
     // ---- test data ----
     auto scanned = segmented_exclusive_scan(values, heads);
 
@@ -250,36 +257,26 @@ void caf_main(actor_system& system, const config& cfg) {
                       uref& inc_heads, uref& tree) {
       d = data;
       h = heads;
-      cout << "before" << endl;
-      auto ie = incs.data();
-      auto ihe = inc_heads.data();
-      auto te = tree.data();
-      for (size_t i = 0; i < ie->size(); ++i) {
-        cout << ie->at(i) << " : " << ihe->at(i) << " : " << te->at(i) << endl;
-      }
       self->send(phase2, incs, inc_heads, tree, static_cast<uval>(groups));
     });
     self->receive([&](uref& incs, uref& inc_heads, uref& tree) {
-      cout << "after" << endl;
-      auto ie = incs.data();
-      auto ihe = inc_heads.data();
-      auto te = tree.data();
-      for (size_t i = 0; i < ie->size(); ++i) {
-        cout << ie->at(i) << " : " << ihe->at(i) << " : " << te->at(i) << endl;
-      }
       self->send(phase3, d, h, incs, inc_heads, tree, static_cast<uval>(n));
     });
     self->receive([&](const uvec& results) {
       if (results != scanned) {
         cout << "Expected different result" << endl;
+        cout << "idx || val | expected | received |" << endl;
         for (size_t i = 0; i < results.size(); ++i) {
-          //if (scanned[i] != results[i]) {
-            cout << "[" << setw(3) << i << "] "
-                 << setw(3) << values[i] << " + " << setw(1) << heads[i]
-                 << " >> "
-                 << setw(3) << scanned[i] << " : " << setw(3) << results[i]
-                 << endl;
-          //}
+          if (heads[i] == 1)
+            cout << "----||-----|----------|----------|------" << endl;
+          cout << setw(3) << i          << " || "
+               << setw(3) << values[i]  << " | "
+               << setw(8) << scanned[i] << " | "
+               << setw(8) << results[i] << " | ";
+          if (scanned[i] != results[i]) {
+            cout << "!!!!";
+          }
+            cout << endl;
         }
       } else {
         cout << "Success" << endl;
@@ -287,15 +284,22 @@ void caf_main(actor_system& system, const config& cfg) {
     });
     /*
     // This just tested a block-level segmented scan, i.e., phase 2
-    self->send(phase2, values, heads, heads, static_cast<uval>(n));
-    auto scanned = segmented_exclusive_scan(values, heads);
-    self->receive([&](uvec& data, uvec&, uvec&) {
-      if (data != scanned) {
+    self->send(block, values, heads, heads, static_cast<uval>(n));
+    self->receive([&](uvec& results, uvec&, uvec&) {
+      if (results != scanned) {
         cout << "Expected different result" << endl;
-        for (size_t i = 0; i < data.size(); ++i) {
-          //if (scanned[i] != data[i]) {
-            cout << "[" << i << "] " << scanned[i] << " : " << data[i] << endl;
-          //}
+        cout << "idx || val | expected | received |" << endl;
+        for (size_t i = 0; i < results.size(); ++i) {
+          if (heads[i] == 1)
+            cout << "----||-----|----------|----------|------" << endl;
+          cout << setw(3) << i          << " || "
+               << setw(3) << values[i]  << " | "
+               << setw(8) << scanned[i] << " | "
+               << setw(8) << results[i] << " | ";
+          if (scanned[i] != results[i]) {
+            cout << "!!!!";
+          }
+            cout << endl;
         }
       } else {
         cout << "Success" << endl;
@@ -303,7 +307,7 @@ void caf_main(actor_system& system, const config& cfg) {
     });
     */
   }
-  dev->queue_count();
+  //dev->queue_count();
 
   // ---- DONE ----
   system.await_all_actors_done();
