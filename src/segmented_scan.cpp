@@ -192,9 +192,9 @@ void caf_main(actor_system& system, const config& cfg) {
     size_t groups = (global_range / local_range);
     heads.insert(begin(heads), n, 0);
     heads[0] = 1;
-    heads[4] = 1;
+    //heads[4] = 1;
     heads[8] = 1;
-    heads[12] = 1;
+    //heads[12] = 1;
     //heads[3] = 1;
     // ---- ndranges ----
     auto ndr_upsweep = spawn_config{dim_vec{global_range}, {},
@@ -241,11 +241,11 @@ void caf_main(actor_system& system, const config& cfg) {
                                  local<uval>{group_size * 2},  // heads buffer
                                  local<uval>{group_size * 2},  // tree buffer
                                  priv<uval, val>{});
-  auto block = mngr.spawn_new(prog, "block_scan", ndr_block, // length / 2 work items
-                              in_out<uval,val,val>{},        // increments
-                              in_out<uval,val,val>{},        // increments heads
-                              in_out<uval,val,val>{},        // tree
-                              priv<uval, val>{});            // length
+    auto block = mngr.spawn_new(prog, "block_scan", ndr_block, // length / 2 work items
+                                in_out<uval,val,val>{},        // increments
+                                in_out<uval,val,val>{},        // increments heads
+                                in_out<uval,val,val>{},        // tree
+                                priv<uval, val>{});            // length
     // ---- test data ----
     auto scanned = segmented_exclusive_scan(values, heads);
 
