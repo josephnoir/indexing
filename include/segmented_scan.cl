@@ -1,4 +1,3 @@
-
 // For optimizations regarding bank conflicts, look at:
 // - http://http.developer.nvidia.com/GPUGems3/gpugems3_ch39.html
 // - Scan Primitives for GPUs (Sengupta et al)
@@ -10,12 +9,13 @@
 /// part      --> partition flags for segments
 /// last_data --> last data entry of each block after upsweep
 /// last_part --> last 
-/// tree      --> save the first flags for later use
+/// flag      --> save the first flags for later use
 kernel void upsweep(global uint* restrict data,
                     global uint* restrict part,
+                    global uint* restrict flag,
                     global uint* restrict last_data,
                     global uint* restrict last_part,
-                    global uint* restrict tree,
+                    global uint* restrict last_flag,
                     local uint* d,
                     local uint* p,
                     uint len) {
@@ -30,26 +30,10 @@ kernel void upsweep(global uint* restrict data,
   const uint o = 2 * thread + 1;  // odd
   const uint ge = 2 * x;          // was: global_offset + e
   const uint go = 2 * x + 1;      // was: global_offset + o
-  d[e] = (e < len) ? data [ge] : 0;
-  d[o] = (o < len) ? data [go] : 0;
-  p[e] = (e < len) ? part[ge] : 0;
-  p[o] = (o < len) ? part[go] : 0;
-  /*
-  int depth = 1 + (int) log2((float) n);
-  for (int i = 0; i < depth; i++) {
-    barrier(CLK_LOCAL_MEM_FENCE);
-    int mask = (0x1 << i) - 1;
-    if ((thread & mask) == mask) {
-      int offset = (0x1 << i);
-      int bi = o;
-      int ai = bi - offset;
-      if (!p[bi]) {
-        d[bi] += d[ai];
-      }
-      p[bi] = p[bi] | p[ai];
-    }
-  }
-  */
+  d[e] = (ge < len) ? data[ge] : 0;
+  d[o] = (go < len) ? data[go] : 0;
+  p[e] = (ge < len) ? part[ge] : 0;
+  p[o] = (go < len) ? part[go] : 0;
   uint offset = 1;
   for (uint i = n >> 1; i > 0; i >>= 1) {
     barrier(CLK_LOCAL_MEM_FENCE);
@@ -61,12 +45,13 @@ kernel void upsweep(global uint* restrict data,
     }
     offset <<= 1;
   }
+  barrier(CLK_LOCAL_MEM_FENCE);
   if (thread == 0)
-    tree[block] = part[e];
+    last_flag[block] = flag[ge];
   //barrier(CLK_LOCAL_MEM_FENCE);
   if (thread == threads_per_block - 1) {
-    last_data[block] = d[o];
-    last_part[block] = p[o];
+    last_data[block] = d[n - 1];
+    last_part[block] = p[n - 1];
   }
   if (ge < len) {
     data[ge] = d[e];
@@ -82,25 +67,27 @@ kernel void upsweep(global uint* restrict data,
 /// Arguments:
 /// data      --> data to scan
 /// part      --> partition flags for segments
-/// tree      --> ...
+/// flag      --> ...
 kernel void block_scan(global uint* restrict data,
                        global uint* restrict part,
-                       global uint* restrict tree,
+                       global uint* restrict flag,
                        uint len) {
-  local uint d[2048];
-  local uint p[2048];
-  local uint t[2048];
+  local uint d[1024];
+  local uint p[1024];
+  local uint f[1024];
   const uint thread = get_local_id(0);
-  const uint n = 2048;
+  const uint threads_per_block = get_local_size(0);
+  const uint elements_per_block = 2 * threads_per_block;
+  const uint n = elements_per_block;
   const uint e = 2 * thread;
   const uint o = 2 * thread + 1;
   d[e] = (e < len) ? data[e] : 0;
   d[o] = (o < len) ? data[o] : 0;
   p[e] = (e < len) ? part[e] : 0;
   p[o] = (o < len) ? part[o] : 0;
-  t[e] = (e < len) ? tree[e] : 0;
-  t[o] = (o < len) ? tree[o] : 0;
-  // build sum in place up the tree
+  f[e] = (e < len) ? flag[e] : 0;
+  f[o] = (o < len) ? flag[o] : 0;
+  // build sum in place up the flag
   uint offset = 1;
   for (uint i = n >> 1; i > 0; i >>= 1) {
     barrier(CLK_LOCAL_MEM_FENCE);
@@ -114,7 +101,7 @@ kernel void block_scan(global uint* restrict data,
   }
   if (thread == 0)
     d[n - 1] = 0;
-  // traverse down tree & build scan
+  // traverse down flag & build scan
   for (uint i = 1; i < n; i <<= 1) {
     offset >>= 1;
     barrier(CLK_LOCAL_MEM_FENCE);
@@ -123,7 +110,7 @@ kernel void block_scan(global uint* restrict data,
       const uint bi = offset * (o + 1) - 1;
       const uint tmp = d[ai];
       d[ai] = d[bi];
-      if (t[ai + 1] == 1)
+      if (f[ai + 1] == 1)
         d[bi] = 0;
       else if (p[ai] == 1)
         d[bi] = tmp;
@@ -149,15 +136,15 @@ kernel void block_scan(global uint* restrict data,
 /// part      --> partition flags for segments
 /// last_data --> last data entry of each block after upsweep
 /// last_part --> last 
-/// tree      --> save the first flags for later use.
+/// flag      --> save the first flags for later use.
 kernel void downsweep(global uint* restrict data,
                       global uint* restrict part,
+                      global uint* restrict flag,
                       global uint* restrict last_data,
                       global uint* restrict last_part,
-                      global uint* restrict tree,
                       local uint* d,
                       local uint* p,
-                      local uint* t,
+                      local uint* f,
                       uint len) {
   const uint x = get_global_id(0);
   const uint thread = get_local_id(0);
@@ -171,40 +158,18 @@ kernel void downsweep(global uint* restrict data,
   const uint ge = 2 * x;     // global_offset + e
   const uint go = 2 * x + 1; // global_offset + o
   // Load data into local memory
-  d[e] = (e < len) ? data[ge] : 0;
-  d[o] = (o < len) ? data[go] : 0;
-  p[e] = (e < len) ? part[ge] : 0;
-  p[o] = (o < len) ? part[go] : 0;
-  t[e] = (e < len) ? tree[ge] : 0;
-  t[o] = (o < len) ? tree[go] : 0;
+  d[e] = (ge < len) ? data[ge] : 0;
+  d[o] = (go < len) ? data[go] : 0;
+  p[e] = (ge < len) ? part[ge] : 1;
+  p[o] = (go < len) ? part[go] : 1;
+  f[e] = (ge < len) ? flag[ge] : 0;
+  f[o] = (go < len) ? flag[go] : 0;
   // Load results from block scan
   if (thread == threads_per_block - 1) {
-    d[o] = last_data[block];
-    p[o] = last_part[block];
+    d[n - 1] = last_data[block];
+    p[n - 1] = last_part[block];
   }
   // downsweep
-  /*
-  int depth = (int) log2((float) n);
-  for (int i = depth; i > -1; i--) {
-    barrier(CLK_LOCAL_MEM_FENCE);
-    int mask = (0x1 << i) - 1;
-    if ((thread & mask) == mask) {
-      int offset = (0x1 << i);
-      int bi = o;
-      int ai = bi - offset;
-      int tmp = d[ai];
-                d[ai] = d[bi];
-      if (t[ai + 1]) {
-        d[bi] = 0;
-      } else if (p[ai]) {
-        d[bi] = tmp;
-      } else {
-        d[bi] += tmp;
-      }
-      p[ai] = 0;
-    }
-  }
-  */
   uint offset = 1;
   for (uint i = n >> 1; i > 0; i >>= 1)
     offset <<= 1;
@@ -216,7 +181,7 @@ kernel void downsweep(global uint* restrict data,
       const int bi = offset * (o + 1) - 1;
       const uint tmp = d[ai];
       d[ai] = d[bi];
-      if (t[ai + 1] == 1)
+      if (f[ai + 1] == 1)
         d[bi] = 0;
       else if (p[ai] == 1)
         d[bi] = tmp;

@@ -142,13 +142,18 @@ public:
 void caf_main(actor_system& system, const config& cfg) {
   uvec values;
   uvec heads;
+  random_device rd;  //Will be used to obtain a seed for the random number engine
+  mt19937 gen(rd()); //Standard mersenne_twister_engine seeded with rd()
+  uniform_int_distribution<size_t> size_gen(1, 1048576);
+  bernoulli_distribution flag_gen(0.1);
   // ---- get data ----
   if (cfg.filename.empty()) {
-    values.resize(16);
+    values.resize(size_gen(gen));
     iota(values.begin(), values.end(), 1);
     // cout << "A filename with test data is required, see --help for detailts."
     //      << endl;
     // return;
+    cout << "Using " << values.size() << " values." << endl;
   } else {
     ifstream source{cfg.filename, std::ios::in};
     uval next;
@@ -180,33 +185,21 @@ void caf_main(actor_system& system, const config& cfg) {
   {
     // ---- input parameters ----
     size_t n = values.size();
-    size_t group_size = 4;
+    size_t group_size = 512;
     size_t global_range = round_up((n + 1) / 2, group_size);
     size_t local_range = group_size;
-    /* // --- values used for direct block scan
-    size_t n = values.size();
-    size_t group_size = (n + 1) / 2;
-    size_t global_range = round_up((n + 1) / 2, group_size);
-    size_t local_range = group_size;
-    */
     size_t groups = (global_range / local_range);
-    heads.insert(begin(heads), n, 0);
-    heads[0] = 1;
-    //heads[4] = 1;
-    heads[8] = 1;
-    //heads[12] = 1;
-    //heads[3] = 1;
+    heads.reserve(values.size());
+    heads.emplace_back(1); // should start with a partition
+    for (size_t i = 1; i < values.size(); ++i)
+      heads.emplace_back(flag_gen(gen) ? 1 : 0);
     // ---- ndranges ----
     auto ndr_upsweep = spawn_config{dim_vec{global_range}, {},
                                     dim_vec{local_range}};
-    //auto ndrange_g = spawn_config{dim_vec{round_up(groups, local_range)}, {},
-    //                              dim_vec{local_range}};
-    //auto ndr_block = spawn_config{dim_vec{round_up(groups, local_range)}, {},
-    //                              dim_vec{local_range}};
-    auto ndr_block = spawn_config{dim_vec{1024}, {}, dim_vec{512}};
+    auto ndr_block = spawn_config{dim_vec{512}, {}, dim_vec{512}};
     auto ndr_downsweep = ndr_upsweep;
     // ---- functions for arguments ----
-    auto incs = [&](const uvec&, const uvec&, uval n) -> size_t {
+    auto incs = [&](const uvec&, const uvec&, const uvec&, uval n) -> size_t {
       // calculate number of groups,
       // depending on the group size from the values size
       auto res = round_up((n + 1) / 2,
@@ -214,63 +207,59 @@ void caf_main(actor_system& system, const config& cfg) {
       //cout << "inc is " << res << endl;
       return res;
     };
-    auto ndr_standalone = spawn_config{dim_vec{1024}, {}, dim_vec{512}};
 
     // ---- actors ----
     auto phase1 = mngr.spawn_new(prog, "upsweep", ndr_upsweep,
-                                 in_out<uval, val, mref>{},    // data
-                                 in_out<uval, val, mref>{},    // heads
-                                 out<uval,mref>{incs},         // increments
-                                 out<uval,mref>{incs},         // increment heads
-                                 out<uval,mref>{incs},         // tree
+                                 in_out<uval,val,mref>{},      // data
+                                 in_out<uval,val,mref>{},      // partition
+                                 in_out<uval,val,mref>{},      // tree
+                                 out<uval,mref>{incs},         // last_data
+                                 out<uval,mref>{incs},         // last_part
+                                 out<uval,mref>{incs},         // last_tree
                                  local<uval>{group_size * 2},  // data buffer
                                  local<uval>{group_size * 2},  // heads buffer
                                  priv<uval, val>{});
-    auto phase2 = mngr.spawn_new(prog, "block_scan", ndr_block, // length / 2 work items
-                                 in_out<uval,mref,mref>{},      // increments
-                                 in_out<uval,mref,mref>{},      // increments heads
-                                 in_out<uval,mref,mref>{},      // tree
+    auto phase2 = mngr.spawn_new(prog, "block_scan", ndr_block,
+                                 in_out<uval,mref,mref>{},      // data
+                                 in_out<uval,mref,mref>{},      // partition
+                                 in<uval,mref>{},               // tree
                                  priv<uval, val>{});            // length
     auto phase3 = mngr.spawn_new(prog, "downsweep", ndr_downsweep,
                                  in_out<uval,mref,val>{},      // data
-                                 in<uval,mref>{},              // heads
-                                 in<uval,mref>{},              // increments
-                                 in<uval,mref>{},              // increment heads
+                                 in_out<uval,mref,val>{},      // partition
                                  in<uval,mref>{},              // tree
+                                 in<uval,mref>{},              // last_data
+                                 in<uval,mref>{},              // last_partition
                                  local<uval>{group_size * 2},  // data buffer
-                                 local<uval>{group_size * 2},  // heads buffer
+                                 local<uval>{group_size * 2},  // part buffer
                                  local<uval>{group_size * 2},  // tree buffer
                                  priv<uval, val>{});
-    auto block = mngr.spawn_new(prog, "block_scan", ndr_block, // length / 2 work items
-                                in_out<uval,val,val>{},        // increments
-                                in_out<uval,val,val>{},        // increments heads
-                                in_out<uval,val,val>{},        // tree
-                                priv<uval, val>{});            // length
     // ---- test data ----
     auto scanned = segmented_exclusive_scan(values, heads);
 
     // ---- computations -----
     scoped_actor self{system};
-    uref d, h;
-    self->send(phase1, values, heads, static_cast<uval>(n));
-    self->receive([&](uref& data, uref& heads, uref& incs,
-                      uref& inc_heads, uref& tree) {
+    uref d, p, t;
+    self->send(phase1, values, heads, heads, static_cast<uval>(n));
+    self->receive([&](uref& data, uref& part, uref& tree,
+                      uref& last_data, uref& last_part, uref& last_tree) {
       d = data;
-      h = heads;
-      self->send(phase2, incs, inc_heads, tree, static_cast<uval>(groups));
+      p = part;
+      t = tree;
+      self->send(phase2, last_data, last_part, last_tree, static_cast<uval>(groups));
     });
-    self->receive([&](uref& incs, uref& inc_heads, uref& tree) {
-      self->send(phase3, d, h, incs, inc_heads, tree, static_cast<uval>(n));
+    self->receive([&](uref& last_data, uref& last_part) {
+      self->send(phase3, d, p, t, last_data, last_part, static_cast<uval>(n));
     });
-    self->receive([&](const uvec& results) {
+    self->receive([&](const uvec& results, const uvec& /*partitions*/) {
       if (results != scanned) {
         cout << "Expected different result" << endl;
-        cout << "idx || val | expected | received |" << endl;
+        cout << "   idx   ||    val   | expected | received |" << endl;
         for (size_t i = 0; i < results.size(); ++i) {
           if (heads[i] == 1)
-            cout << "----||-----|----------|----------|------" << endl;
-          cout << setw(3) << i          << " || "
-               << setw(3) << values[i]  << " | "
+            cout << "---------||----------|----------|----------|------" << endl;
+          cout << setw(8) << i          << " || "
+               << setw(8) << values[i]  << " | "
                << setw(8) << scanned[i] << " | "
                << setw(8) << results[i] << " | ";
           if (scanned[i] != results[i]) {
