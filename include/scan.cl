@@ -128,10 +128,10 @@ kernel void es_phase_1(global uint* restrict data,
 
   uint offset = 1;
   // A (2 lines) --> load input into shared memory
-  tmp[2 * thread    ]
-    = (2 * thread     < len) ? data[global_offset + (2 * thread    )] : 0;
-  tmp[2 * thread + 1]
-    = (2 * thread + 1 < len) ? data[global_offset + (2 * thread + 1)] : 0;
+  tmp[2 * thread] = (global_offset + (2 * thread) < len)
+                  ? data[global_offset + (2 * thread)] : 0;
+  tmp[2 * thread + 1] = (global_offset + (2 * thread + 1) < len)
+                      ? data[global_offset + (2 * thread + 1)] : 0;
   // build sum in place up the tree
   for (uint d = n >> 1; d > 0; d >>= 1) {
     barrier(CLK_LOCAL_MEM_FENCE);
@@ -163,9 +163,9 @@ kernel void es_phase_1(global uint* restrict data,
   }
   barrier(CLK_LOCAL_MEM_FENCE);
   // E (2 line) --> write results to device memory
-  if (2 * thread < len)
-    data[global_offset + (2 * thread    )] = tmp[2 * thread    ];
-  if (2 * thread + 1 < len)
+  if (global_offset + (2 * thread) < len)
+    data[global_offset + (2 * thread)] = tmp[2 * thread];
+  if (global_offset + (2 * thread + 1) < len)
     data[global_offset + (2 * thread + 1)] = tmp[2 * thread + 1];
 }
 
@@ -178,7 +178,7 @@ kernel void es_phase_2(global uint* restrict data,
   uint offset = 1;
   const uint n = 2048;
   // A (2 lines) --> load input into shared memory
-  tmp[2 * thread    ] = (2 * thread     < len) ? increments[2 * thread    ] : 0;
+  tmp[2 * thread] = (2 * thread < len) ? increments[2 * thread] : 0;
   tmp[2 * thread + 1] = (2 * thread + 1 < len) ? increments[2 * thread + 1] : 0;
   // build sum in place up the tree
   for (uint d = n >> 1; d > 0; d >>= 1) {
@@ -209,7 +209,7 @@ kernel void es_phase_2(global uint* restrict data,
   }
   barrier(CLK_LOCAL_MEM_FENCE);
   // E (2 line) --> write results to device memory
-  if (2 * thread     < len) increments[2 * thread    ] = tmp[2 * thread    ];
+  if (2 * thread < len) increments[2 * thread] = tmp[2 * thread];
   if (2 * thread + 1 < len) increments[2 * thread + 1] = tmp[2 * thread + 1];
 }
 
