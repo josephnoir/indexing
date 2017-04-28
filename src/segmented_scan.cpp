@@ -201,15 +201,18 @@ void caf_main(actor_system& system, const config& cfg) {
     auto nd_conf = [group_size, get_size](size_t dim) {
       return spawn_config{dim_vec{get_size(dim)}, {}, dim_vec{group_size}};
     };
-    auto reduced = [&](const uvec&, const uvec&, const uvec&, uval n) -> size_t {
+    auto reduced_vec = [&](const uvec&, const uvec&, const uvec&, uval n) {
       // calculate number of groups from the group size from the values size
-      //return  round_up((n + 1) / 2, static_cast<uval>(group_size)) / group_size;
-      return get_size(n) / group_size;
+      return size_t{get_size(n) / group_size};
+    };
+    auto reduced_ref = [&](const uref&, const uref&, const uref&, uval n) {
+      // calculate number of groups from the group size from the values size
+      return size_t{get_size(n) / group_size};
     };
     // config for multi-level segmented scan
     uval n_outer = n;
-    uval n_inner = get_size(n_outer) / group_size; //round_up((n_outer + 1) / 2, group_size);
-    uval n_block = get_size(n_inner) / group_size; //round_up((n_inner + 1) / 2, group_size);
+    uval n_inner = get_size(n_outer) / group_size;
+    uval n_block = get_size(n_inner) / group_size;
     // ---- ndranges ----
     auto ndr_upsweep_01 = nd_conf(n_outer);
     auto ndr_upsweep_02 = nd_conf(n_inner);
@@ -218,12 +221,12 @@ void caf_main(actor_system& system, const config& cfg) {
     auto ndr_downsweep_01 = ndr_upsweep_01;
     // ---- actors ----
     auto phase1 = mngr.spawn_new(prog, "upsweep", ndr_upsweep_01,
-                                 in_out<uval,val,mref>{},      // data
+                                 in_out<uval,mref,mref>{},      // data
                                  in_out<uval,val,mref>{},      // partition
                                  in_out<uval,val,mref>{},      // tree
-                                 out<uval,mref>{reduced},      // last_data
-                                 out<uval,mref>{reduced},      // last_part
-                                 out<uval,mref>{reduced},      // last_tree
+                                 out<uval,mref>{reduced_vec},  // last_data
+                                 out<uval,mref>{reduced_vec},  // last_part
+                                 out<uval,mref>{reduced_vec},  // last_tree
                                  local<uval>{group_size * 2},  // data buffer
                                  local<uval>{group_size * 2},  // heads buffer
                                  priv<uval, val>{});
@@ -231,9 +234,9 @@ void caf_main(actor_system& system, const config& cfg) {
                                  in_out<uval,mref,mref>{},     // data
                                  in_out<uval,mref,mref>{},     // partition
                                  in_out<uval,mref,mref>{},     // tree
-                                 out<uval,mref>{reduced},      // last_data
-                                 out<uval,mref>{reduced},      // last_part
-                                 out<uval,mref>{reduced},      // last_tree
+                                 out<uval,mref>{reduced_ref},  // last_data
+                                 out<uval,mref>{reduced_ref},  // last_part
+                                 out<uval,mref>{reduced_ref},  // last_tree
                                  local<uval>{group_size * 2},  // data buffer
                                  local<uval>{group_size * 2},  // heads buffer
                                  priv<uval, val>{});
@@ -253,8 +256,8 @@ void caf_main(actor_system& system, const config& cfg) {
                                  local<uval>{group_size * 2},  // tree buffer
                                  priv<uval, val>{});
     auto phase5 = mngr.spawn_new(prog, "downsweep", ndr_downsweep_01,
-                                 in_out<uval,mref,val>{},      // data
-                                 in_out<uval,mref,val>{},      // partition
+                                 in_out<uval,mref,mref>{},     // data
+                                 in_out<uval,mref,mref>{},     // partition
                                  in<uval,mref>{},              // tree
                                  in<uval,mref>{},              // last_data
                                  in<uval,mref>{},              // last_partition
@@ -262,52 +265,70 @@ void caf_main(actor_system& system, const config& cfg) {
                                  local<uval>{group_size * 2},  // part buffer
                                  local<uval>{group_size * 2},  // tree buffer
                                  priv<uval, val>{});
+    auto convert = mngr.spawn_new(prog, "make_inclusive", ndr_upsweep_01,
+                                  in_out<uval, mref, val>{},
+                                  in<uval, mref>{},
+                                  priv<uval, val>{});
     // ---- test data ----
-    auto scanned = segmented_exclusive_scan(values, heads);
+    //auto scanned = segmented_exclusive_scan(values, heads);
+    auto scanned = segmented_inclusive_scan(values, heads);
 
     // ---- computations -----
-    // TODO: multiple levels
-    // TODO: exclusive -> inclusive
     // TODO: use request to avoid the write back to variables
-    // TODO: ...
     scoped_actor self{system};
+    uref vals = dev->global_argument(values);
+    auto save = dev->copy(vals);
     uref d, p, t, d2, p2, t2;
-    cout << "Sending data to first actor" << endl;
-    self->send(phase1, values, heads, heads, static_cast<uval>(n_outer));
-    self->receive([&](uref& data, uref& part, uref& tree,
+    self->send(phase1, vals, heads, heads, static_cast<uval>(n_outer));
+    self->receive([&](uref&      data, uref&      part, uref&      tree,
                       uref& last_data, uref& last_part, uref& last_tree) {
-      cout << "Phase 1 done" << endl;
       d = data;
       p = part;
       t = tree;
-      cout << "Saving d, p, t, reduced buffers have " << last_data.size()
-           << " elements vs the expected " << n_inner << " elements." << endl;
       self->send(phase2, last_data, last_part, last_tree,
                  static_cast<uval>(n_inner));
     });
-    self->receive([&](uref& data, uref& part, uref& tree,
+    self->receive([&](uref&      data, uref&      part, uref&      tree,
                       uref& last_data, uref& last_part, uref& last_tree) {
-      cout << "Phase 2 done" << endl;
       d2 = data;
       p2 = part;
       t2 = tree;
-      cout << "Saving d2, p2, t2, reduced buffers have " << last_data.size()
-           << " elements vs the expected " << n_block << " elements." << endl;
       self->send(phase3, last_data, last_part, last_tree,
                  static_cast<uval>(n_block));
     });
     self->receive([&](uref& ld, uref& lp) {
-      cout << "Phase 3 done" << endl;
       self->send(phase4, d2, p2, t2, ld, lp, static_cast<uval>(n_inner));
     });
     self->receive([&](uref& ld, uref& lp) {
-      cout << "Phase 4 done" << endl;
       self->send(phase5, d, p, t, ld, lp, static_cast<uval>(n_outer));
     });
-    self->receive([&](const uvec& results, const uvec& /*partitions*/) {
-      cout << "Phase 5 done" << endl;
-      if (results != scanned) {
+    self->receive([&](const uref& results, const uref& /*partitions*/) {
       /*
+      if (results != scanned) {
+        cout << "Expected different result" << endl;
+        cout << "   idx   ||    val   | expected | received |" << endl;
+        for (size_t i = 0; i < results.size(); ++i) {
+          if (heads[i] == 1)
+            cout << "---------||----------|----------|----------|------" << endl;
+          cout << setw(8) << i          << " || "
+               << setw(8) << values[i]  << " | "
+               << setw(8) << scanned[i] << " | "
+               << setw(8) << results[i] << " | ";
+          if (scanned[i] != results[i]) {
+            cout << "!!!!";
+          }
+            cout << endl;
+        }
+        cout << "Failure" << endl;
+      } else {
+        cout << "Success" << endl;
+      }
+      */
+      self->send(convert, results, *save, static_cast<uval>(n_outer));
+    });
+    self->receive([&](const uvec& results) {
+      if (results != scanned) {
+        /*
         cout << "Expected different result" << endl;
         cout << "   idx   ||    val   | expected | received |" << endl;
         for (size_t i = 0; i < results.size(); ++i) {

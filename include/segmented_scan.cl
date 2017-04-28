@@ -195,3 +195,13 @@ kernel void downsweep(global uint* restrict data,
   if (ge < len) data[ge] = d[e];
   if (go < len) data[go] = d[o];
 }
+
+
+kernel void make_inclusive(global uint* restrict data,
+                           global uint* restrict original,
+                           uint len) {
+  const uint even = 2 * get_global_id(0);
+  const uint odd = 2 * get_global_id(0) + 1;
+  if (even < len) data[even] += original[even];
+  if (odd < len) data[odd] += original[odd];
+}
