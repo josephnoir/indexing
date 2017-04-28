@@ -41,7 +41,7 @@ using init_atom = atom_constant<atom("init")>;
 using quit_atom = atom_constant<atom("quit")>;
 using index_atom = atom_constant<atom("index")>;
 
-constexpr const char* kernel_file_09 = "./include/empty_kernel.cl";
+//constexpr const char* kernel_file_09 = "./include/empty_kernel.cl";
 
 //constexpr const char* kernel_name_01a = "kernel_wah_index";
 
