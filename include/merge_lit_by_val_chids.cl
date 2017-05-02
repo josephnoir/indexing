@@ -55,3 +55,16 @@ kernel void lazy_segmented_scan(global uint* restrict heads,
   }
 }
 
+// Replacing the lazy segmented scan above with the segemented scan in the related cl
+// file, leaves us with an array that saves the max at the end of each segment. This
+// kernel converts the heads array appropriately. Better solution: implement a proper
+// segmented reduction.
+kernel void convert_heads(global const uint* restrict in,
+                          global       uint* restrict out,
+                          const uint len) {
+  const uint thread = get_global_id(0);
+  const uint even = 2 * thread;
+  const uint odd  = 2 * thread + 1;
+  if (even < len) out[even] = (even + 1) < len ? in[even + 1] : 1;
+  if (odd  < len) out[odd ] = (odd  + 1) < len ? in[odd  + 1] : 1;
+}

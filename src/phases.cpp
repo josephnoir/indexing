@@ -72,12 +72,18 @@ constexpr const char* kernel_file_06 = "./include/compute_colum_length.cl";
 constexpr const char* kernel_file_07 = "./include/stream_compaction.cl";
 constexpr const char* kernel_file_08 = "./include/scan.cl";
 constexpr const char* kernel_file_09 = "./include/radix.cl";
+constexpr const char* kernel_file_10 = "./include/segmented_scan.cl";
 
 //constexpr const char* kernel_name_01a = "kernel_wah_index";
 
 } // namespace anonymous
 
 // required to allow sending mem_ref<int> in messages
+CAF_ALLOW_UNSAFE_MESSAGE_TYPE(uref);
+CAF_ALLOW_UNSAFE_MESSAGE_TYPE(radix_config);
+CAF_ALLOW_UNSAFE_MESSAGE_TYPE(opencl::dim_vec);
+CAF_ALLOW_UNSAFE_MESSAGE_TYPE(spawn_config);
+/*
 namespace caf {
   template <>
   struct allowed_unsafe_message_type<uref> : std::true_type {};
@@ -89,6 +95,7 @@ namespace caf {
   template <>
   struct allowed_unsafe_message_type<spawn_config> : std::true_type {};
 }
+*/
 
 
 namespace {
@@ -436,6 +443,7 @@ void caf_main(actor_system& system, const config& cfg) {
   auto prog_sc     = mngr.create_program_from_file(kernel_file_07, "", dev);
   auto prog_es     = mngr.create_program_from_file(kernel_file_08, "", dev);
   auto prog_radix  = mngr.create_program_from_file(kernel_file_09, "", dev);
+  auto prog_sscan  = mngr.create_program_from_file(kernel_file_10, "", dev);
 
   // configuration parameters
   auto n = values.size();
@@ -465,6 +473,19 @@ void caf_main(actor_system& system, const config& cfg) {
     return (round_up((n + 1) / 2,
             static_cast<uval>(es_group_size)) / es_group_size);
   };
+  // segmented scan
+  auto half_block = dev->get_max_work_group_size() / 2;
+  auto get_size = [half_block](size_t n) -> size_t {
+    return round_up((n + 1) / 2, half_block);
+  };
+  auto nd_conf = [half_block, get_size](size_t dim) {
+    return spawn_config{dim_vec{get_size(dim)}, {}, dim_vec{half_block}};
+  };
+  auto reduced_ref = [&](const uref&, const uref&, const uref&, uval n) {
+    // calculate number of groups from the group size from the values size
+    return size_t{get_size(n) / half_block};
+  };
+  auto same_size = [&](const uref&, uval n) { return size_t{n}; };
 
   // sort configuration
   // thread block has multiple thread groups has multiple threads
@@ -551,6 +572,10 @@ void caf_main(actor_system& system, const config& cfg) {
     auto merge_scan = mngr.spawn_new(prog_merge, "lazy_segmented_scan",
                                      ndrange, in<uval,mref>{},
                                      in_out<uval,mref,mref>{});
+    auto merge_conv = mngr.spawn_new(prog_merge, "convert_heads", ndrange,
+                                     in<uval,mref>{},
+                                     out<uval,mref>{same_size},
+                                     priv<uval,val>{});
     // stream compaction
     auto sc_count = mngr.spawn_new(prog_sc,"countElts", ndrange_128,
                                    out<uval,mref>{wi_two},
@@ -606,6 +631,66 @@ void caf_main(actor_system& system, const config& cfg) {
                               in_out<uval,mref,mref>{},
                               in<uval,mref>{},
                               priv<uval, val>{});
+    // config for multi-level segmented scan
+    uval n_outer = n;
+    uval n_inner = get_size(n_outer) / half_block;
+    uval n_block = get_size(n_inner) / half_block;
+    // ---- ndranges ----
+    auto ndr_upsweep_01 = nd_conf(n_outer);
+    auto ndr_upsweep_02 = nd_conf(n_inner);
+    auto ndr_block = spawn_config{dim_vec{half_block}, {}, dim_vec{half_block}};
+    auto ndr_downsweep_02 = ndr_upsweep_02;
+    auto ndr_downsweep_01 = ndr_upsweep_01;
+    // TODO: Reuse phase1 as phase2 and phase4 as phase5
+    auto phase1 = mngr.spawn_new(prog_sscan, "upsweep", ndr_upsweep_01,
+                                 in_out<uval,mref,mref>{},     // data
+                                 in_out<uval,mref,mref>{},     // partition
+                                 in_out<uval,mref,mref>{},     // tree
+                                 out<uval,mref>{reduced_ref},  // last_data
+                                 out<uval,mref>{reduced_ref},  // last_part
+                                 out<uval,mref>{reduced_ref},  // last_tree
+                                 local<uval>{half_block * 2},  // data buffer
+                                 local<uval>{half_block * 2},  // heads buffer
+                                 priv<uval, val>{});
+    auto phase2 = mngr.spawn_new(prog_sscan, "upsweep", ndr_upsweep_02,
+                                 in_out<uval,mref,mref>{},     // data
+                                 in_out<uval,mref,mref>{},     // partition
+                                 in_out<uval,mref,mref>{},     // tree
+                                 out<uval,mref>{reduced_ref},  // last_data
+                                 out<uval,mref>{reduced_ref},  // last_part
+                                 out<uval,mref>{reduced_ref},  // last_tree
+                                 local<uval>{half_block * 2},  // data buffer
+                                 local<uval>{half_block * 2},  // heads buffer
+                                 priv<uval, val>{});
+    auto phase3 = mngr.spawn_new(prog_sscan, "block_scan", ndr_block,
+                                 in_out<uval,mref,mref>{},     // data
+                                 in_out<uval,mref,mref>{},     // partition
+                                 in<uval,mref>{},              // tree
+                                 priv<uval, val>{});           // length
+    auto phase4 = mngr.spawn_new(prog_sscan, "downsweep", ndr_downsweep_02,
+                                 in_out<uval,mref,mref>{},     // data
+                                 in_out<uval,mref,mref>{},     // partition
+                                 in<uval,mref>{},              // tree
+                                 in<uval,mref>{},              // last_data
+                                 in<uval,mref>{},              // last_partition
+                                 local<uval>{half_block * 2},  // data buffer
+                                 local<uval>{half_block * 2},  // part buffer
+                                 local<uval>{half_block * 2},  // tree buffer
+                                 priv<uval, val>{});
+    auto phase5 = mngr.spawn_new(prog_sscan, "downsweep", ndr_downsweep_01,
+                                 in_out<uval,mref,mref>{},     // data
+                                 in_out<uval,mref,mref>{},     // partition
+                                 in<uval,mref>{},              // tree
+                                 in<uval,mref>{},              // last_data
+                                 in<uval,mref>{},              // last_partition
+                                 local<uval>{half_block * 2},  // data buffer
+                                 local<uval>{half_block * 2},  // part buffer
+                                 local<uval>{half_block * 2},  // tree buffer
+                                 priv<uval, val>{});
+    auto convert = mngr.spawn_new(prog_sscan, "make_inclusive", ndr_upsweep_01,
+                                  in_out<uval, mref, mref>{},
+                                  in<uval, mref>{},
+                                  priv<uval, val>{});
     scoped_actor self{system};
 #ifdef SHOW_TIME_CONSUMPTION
     auto to = high_resolution_clock::now();
@@ -936,10 +1021,54 @@ void caf_main(actor_system& system, const config& cfg) {
       heads_r = heads;
     });
     // cout << "Col: prepare done." << endl;
-    self->send(col_scan, ndrange_k, heads_r, tmp_r);
-    self->receive([&](uref& heads, uref& tmp) {
-      heads_r = heads;
-      tmp_r = tmp;
+//    self->send(col_scan, ndrange_k, heads_r, tmp_r);
+//    self->receive([&](uref& heads, uref& tmp) {
+//      heads_r = heads;
+//      tmp_r = tmp;
+//    });
+    // config for multi-level segmented scan
+    n_outer = tmp_r.size();
+    n_inner = get_size(n_outer) / half_block;
+    n_block = get_size(n_inner) / half_block;
+    // ---- ndranges ----
+    ndr_upsweep_01 = nd_conf(n_outer);
+    ndr_upsweep_02 = nd_conf(n_inner);
+    ndr_block = spawn_config{dim_vec{half_block}, {}, dim_vec{half_block}};
+    ndr_downsweep_02 = ndr_upsweep_02;
+    ndr_downsweep_01 = ndr_upsweep_01;
+    auto save_values = dev->copy(tmp_r);
+    auto save_heads = dev->copy(heads_r);
+    uref d, p, t, d2, p2, t2;
+    self->send(phase1, ndr_upsweep_01, tmp_r, heads_r, *save_heads, n_outer);
+    self->receive([&](uref&      data, uref&      part, uref&      tree,
+                      uref& last_data, uref& last_part, uref& last_tree) {
+      d = data;
+      p = part;
+      t = tree;
+      self->send(phase2, ndr_upsweep_02, last_data, last_part, last_tree, n_inner);
+    });
+    self->receive([&](uref&      data, uref&      part, uref&      tree,
+                      uref& last_data, uref& last_part, uref& last_tree) {
+      d2 = data;
+      p2 = part;
+      t2 = tree;
+      self->send(phase3, ndr_block, last_data, last_part, last_tree, n_block);
+    });
+    self->receive([&](uref& ld, uref& lp) {
+      self->send(phase4, ndr_downsweep_02, d2, p2, t2, ld, lp, n_inner);
+    });
+    self->receive([&](uref& ld, uref& lp) {
+      self->send(phase5, ndr_downsweep_01, d, p, t, ld, lp, n_outer);
+    });
+    self->receive([&](const uref& results, const uref& /*partitions*/) {
+      self->send(convert, ndr_upsweep_01, results, std::move(*save_values), n_outer);
+    });
+    self->receive([&](const uref& results) {
+      tmp_r = results; // ???????
+    });
+    self->send(merge_conv, ndr_upsweep_01, std::move(*save_heads), n_outer);
+    self->receive([&](const uref& new_heads) {
+      heads_r = new_heads;
     });
     // cout << "Col: scan done." << endl;
 
@@ -1025,6 +1154,7 @@ void caf_main(actor_system& system, const config& cfg) {
     uvec test_input_col{test_input};
     auto test_keycount = compute_colum_length(test_input_col, test_chids_fuse,
                                               test_offsets, test_k);
+    cout << "Got " << keycount << " keys and expected " << test_keycount << "." << endl;
     valid_or_exit(test_keycount == keycount, "Offsets have different keycount.");
     valid_or_exit(offsets == test_offsets, "Offsets differ.");
     cout << "Run included tests of calculated data." << endl
