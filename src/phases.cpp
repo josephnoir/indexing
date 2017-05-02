@@ -68,7 +68,7 @@ constexpr const char* kernel_file_02 = "./include/produce_chunk_id_literals.cl";
 constexpr const char* kernel_file_03 = "./include/merge_lit_by_val_chids.cl";
 constexpr const char* kernel_file_04 = "./include/produce_fills.cl";
 constexpr const char* kernel_file_05 = "./include/fuse_fill_literals.cl";
-constexpr const char* kernel_file_06 = "./include/compute_colum_length.cl";
+constexpr const char* kernel_file_06 = "./include/compute_column_length.cl";
 constexpr const char* kernel_file_07 = "./include/stream_compaction.cl";
 constexpr const char* kernel_file_08 = "./include/scan.cl";
 constexpr const char* kernel_file_09 = "./include/radix.cl";
@@ -83,20 +83,6 @@ CAF_ALLOW_UNSAFE_MESSAGE_TYPE(uref);
 CAF_ALLOW_UNSAFE_MESSAGE_TYPE(radix_config);
 CAF_ALLOW_UNSAFE_MESSAGE_TYPE(opencl::dim_vec);
 CAF_ALLOW_UNSAFE_MESSAGE_TYPE(spawn_config);
-/*
-namespace caf {
-  template <>
-  struct allowed_unsafe_message_type<uref> : std::true_type {};
-  template <>
-  struct allowed_unsafe_message_type<mem_ref<radix_config>>
-    : std::true_type {};
-  template <>
-  struct allowed_unsafe_message_type<opencl::dim_vec> : std::true_type {};
-  template <>
-  struct allowed_unsafe_message_type<spawn_config> : std::true_type {};
-}
-*/
-
 
 namespace {
 
@@ -158,9 +144,9 @@ string decoded_bitmap(const uvec& bitmap) {
     }
   }
   auto res = s.str();
-  //auto tmp = res.size();
-  //s.str(string());
-  //s << tmp;
+  // auto tmp = res.size();
+  // s.str(string());
+  // s << tmp;
   //return s.str();
   res.erase(res.find_last_not_of("0") + 1);
   return res;
@@ -263,7 +249,7 @@ void produce_fills(vector<uval>& input,
       new_chids[i] = chids[i] - chids[i - 1] - 1;
     } else {
       new_chids[i] = chids[i];
-      // Original code:
+      // --- Original code ---
       //if (chids[i] != 0)
       //  new_chids[i] = chids[i] - 1;
       // ... which seems to result in the loss of fills
@@ -280,10 +266,8 @@ size_t stream_compaction(vector<T>& index, T val = 0) {
 
 // in : chids, lits, k
 // out: index, index_length
-size_t fuse_fill_literals(vector<uval>& chids,
-                          vector<uval>& lits,
-                          vector<uval>& index,
-                          size_t k) {
+size_t fuse_fill_literals(vector<uval>& chids, vector<uval>& lits,
+                          vector<uval>& index, size_t k) {
   assert(chids.size() == k);
   assert(lits.size() == k);
   assert(index.size() >= 2*k);
@@ -342,10 +326,10 @@ vector<T> exclusive_scan(const vector<T>& vals) {
 
 // in : chids, input, n
 // out: keycnt, offsets
-size_t compute_colum_length(vector<uval>& input,
-                            vector<uval>& chids,
-                            vector<uval>& offsets,
-                            size_t k) {
+size_t compute_column_length(vector<uval>& input,
+                             vector<uval>& chids,
+                             vector<uval>& offsets,
+                             size_t k) {
   vector<uval> tmp(k);
   for (size_t i = 0; i < k; ++i) {
     tmp[i] = (1 + (chids[i] == 0 ? 0 : 1));
@@ -397,49 +381,45 @@ void caf_main(actor_system& system, const config& cfg) {
          << endl;
     return;
   }
-  //cout << "Reading data from '" << cfg.filename << "' ... " << flush;
   ifstream source{cfg.filename, std::ios::in};
   uval next;
-  while (source >> next) {
+  while (source >> next)
     values.push_back(next);
-  }
-  //cout << "values: " << values.size() << endl;
   auto bound = cfg.bound;
   if (bound == 0 && !values.empty()) {
     auto itr = max_element(values.begin(), values.end());
     bound = *itr;
   }
-  //cout << "Maximum value is '" << bound << "'." << endl;
 
   auto& mngr = system.opencl_manager();
 
-  // get device
+  // get device named in config ...
   auto opt = mngr.get_device_if([&](const device_ptr dev) {
-      if (cfg.device_name.empty())
-        return true;
-      return dev->get_name() == cfg.device_name;
+    if (cfg.device_name.empty())
+      return true;
+    return dev->get_name() == cfg.device_name;
   });
-  if (!opt) {
+  // ... or first one available
+  if (!opt)
     opt = mngr.get_device_if([&](const device_ptr) { return true; });
-    if (!opt) {
-      cout << "No device found." << endl;
-      return;
-    }
-    //cerr << "Using device '" << opt->get_name() << "'." << endl;
+  if (!opt) {
+    cerr << "No device found." << endl;
+    return;
   }
+  cout << "Using device '" << (*opt)->get_name() << "'." << endl;
   auto dev = *opt;
 
 #ifdef WITH_CPU_TESTS
   // Create test data
 #endif // WITH_CPU_TESTS
 
-  // load kernels
+  // load kernels from source
   auto prog_rids   = mngr.create_program_from_file(kernel_file_01, "", dev);
   auto prog_chunks = mngr.create_program_from_file(kernel_file_02, "", dev);
   auto prog_merge  = mngr.create_program_from_file(kernel_file_03, "", dev);
   auto prog_fills  = mngr.create_program_from_file(kernel_file_04, "", dev);
   auto prog_fuse   = mngr.create_program_from_file(kernel_file_05, "", dev);
-  auto prog_colum  = mngr.create_program_from_file(kernel_file_06, "", dev);
+  auto prog_column = mngr.create_program_from_file(kernel_file_06, "", dev);
   auto prog_sc     = mngr.create_program_from_file(kernel_file_07, "", dev);
   auto prog_es     = mngr.create_program_from_file(kernel_file_08, "", dev);
   auto prog_radix  = mngr.create_program_from_file(kernel_file_09, "", dev);
@@ -447,9 +427,9 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // configuration parameters
   auto n = values.size();
-  auto ndrange = spawn_config{dim_vec{n}};
+  auto ndr = spawn_config{dim_vec{n}};
   auto wi = round_up(n, 128ul);
-  auto ndrange_128  = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
+  auto ndr_128  = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
   // TODO: not a nice solution, need some better approach
   auto wi_two = [&](uref&, uval&) { return size_t{wi / 128}; };
   auto k_once = [](uref&, uref&, uref&, uval k) { return size_t{k}; };
@@ -464,9 +444,9 @@ void caf_main(actor_system& system, const config& cfg) {
   size_t es_local_range = es_group_size;
   size_t es_groups = (es_global_range / es_local_range);
   size_t es_groups_rounded = round_up(es_groups, 128ul);
-  auto es_range_h = spawn_config{dim_vec{es_global_range}, {},
-                                 dim_vec{es_local_range}};
-  auto es_range_g = spawn_config{dim_vec{es_groups_rounded}, {},
+  auto ndr_es_h = spawn_config{dim_vec{es_global_range}, {},
+                               dim_vec{es_local_range}};
+  auto ndr_es_g = spawn_config{dim_vec{es_groups_rounded}, {},
                                  dim_vec{es_groups_rounded / 2}};
   auto es_incs = [&](const uref&, uval n) -> size_t {
     // calculate number of groups, depending on the group size from the input size
@@ -522,34 +502,32 @@ void caf_main(actor_system& system, const config& cfg) {
     threads_per_block,
     elements
   };
-  size_t radix_global = threads_per_block * blocks;
-  size_t radix_local = threads_per_block;
-  auto radix_range = spawn_config{dim_vec{radix_global}, {},
-                                  dim_vec{radix_local}};
-  auto zero_range = spawn_config{dim_vec{counters}};
+  auto ndr_radix = spawn_config{dim_vec{threads_per_block * blocks}, {},
+                                dim_vec{threads_per_block}};
+  auto ndr_zero = spawn_config{dim_vec{counters}};
   {
     auto start = high_resolution_clock::now();
     // create phases
     // sort rids ...
-    auto rids_1 = mngr.spawn_new(prog_rids, "create_rids", ndrange,
+    auto rids_1 = mngr.spawn_new(prog_rids, "create_rids", ndr,
                                  in_out<uval,mref,mref>{}, out<uval,mref>{},
                                  priv<uval>{static_cast<uval>(n)});
     // radix sort (by key)
-    auto radix_zero = mngr.spawn_new(prog_radix, "zeroes", zero_range,
+    auto radix_zero = mngr.spawn_new(prog_radix, "zeroes", ndr_zero,
                                      in_out<uval,mref,mref>{});
-    auto radix_count = mngr.spawn_new(prog_radix, "count", radix_range,
+    auto radix_count = mngr.spawn_new(prog_radix, "count", ndr_radix,
                                       in_out<uval,mref,mref>{},
                                       in_out<uval,mref,mref>{},
                                       priv<radix_config>{rc},
                                       priv<uval,val>{});
-    auto radix_scan = mngr.spawn_new(prog_radix, "scan", radix_range,
+    auto radix_scan = mngr.spawn_new(prog_radix, "scan", ndr_radix,
                                      in_out<uval,mref,mref>{},
                                      in_out<uval,mref,mref>{},
                                      in_out<uval,mref,mref>{},
                                      local<uval>{groups_per_block * blocks},
                                      priv<radix_config>{rc},
                                      priv<uval,val>{});
-    auto radix_move = mngr.spawn_new(prog_radix, "reorder_kv", radix_range,
+    auto radix_move = mngr.spawn_new(prog_radix, "reorder_kv", ndr_radix,
                                      in_out<uval,mref,mref>{},
                                      in_out<uval,mref,mref>{},
                                      in_out<uval,mref,mref>{},
@@ -561,30 +539,26 @@ void caf_main(actor_system& system, const config& cfg) {
                                      priv<radix_config>{rc},
                                      priv<uval,val>{});
     // produce chuncks ...
-    auto chunks = mngr.spawn_new(prog_chunks, "produce_chunks", ndrange,
+    auto chunks = mngr.spawn_new(prog_chunks, "produce_chunks", ndr,
                                  in_out<uval,mref,mref>{},
                                  out<uval,mref>{}, out<uval,mref>{});
     // <uvec, uvec, uvec>
-    auto merge_heads = mngr.spawn_new(prog_merge, "create_heads", ndrange,
+    auto merge_heads = mngr.spawn_new(prog_merge, "create_heads", ndr,
                                       in_out<uval,mref,mref>{},
                                       in_out<uval,mref,mref>{},
                                       out<uval,mref>{});
-    auto merge_scan = mngr.spawn_new(prog_merge, "lazy_segmented_scan",
-                                     ndrange, in<uval,mref>{},
-                                     in_out<uval,mref,mref>{});
-    auto merge_conv = mngr.spawn_new(prog_merge, "convert_heads", ndrange,
+    auto merge_scan = mngr.spawn_new(prog_merge, "lazy_segmented_scan", ndr,
                                      in<uval,mref>{},
-                                     out<uval,mref>{same_size},
-                                     priv<uval,val>{});
+                                     in_out<uval,mref,mref>{});
     // stream compaction
-    auto sc_count = mngr.spawn_new(prog_sc,"countElts", ndrange_128,
+    auto sc_count = mngr.spawn_new(prog_sc,"countElts", ndr_128,
                                    out<uval,mref>{wi_two},
                                    in_out<uval,mref,mref>{},
                                    local<uval>{128},
                                    priv<uval,val>{});
     // sum operation is handled by es actors belows (exclusive scan)
     auto sc_move = mngr.spawn_new(prog_sc, "moveValidElementsStaged",
-                                  ndrange_128,
+                                  ndr_128,
                                   out<uval,val>{one},
                                   in_out<uval,mref,mref>{},
                                   out<uval,mref>{k_once},
@@ -595,22 +569,26 @@ void caf_main(actor_system& system, const config& cfg) {
                                   local<uval>{128},
                                   priv<uval,val>{});
     // produce fills
-    auto fills = mngr.spawn_new(prog_fills, "produce_fills", ndrange,
+    auto fills = mngr.spawn_new(prog_fills, "produce_fills", ndr,
                                 in<uval,mref>{},in<uval,mref>{},
                                 out<uval,mref>{fills_k},
                                 priv<uval,val>{});
     // fuse fill & literals
-    auto fuse_prep = mngr.spawn_new(prog_fuse, "prepare_index", ndrange,
+    auto fuse_prep = mngr.spawn_new(prog_fuse, "prepare_index", ndr,
                                     in<uval,mref>{},in<uval,mref>{},
                                     out<uval,mref>{k_double},
                                     priv<uval,val>{});
     // compute column length
-    auto col_prep = mngr.spawn_new(prog_colum, "colum_prepare", ndrange,
+    auto col_prep = mngr.spawn_new(prog_column, "column_prepare", ndr,
                                    in_out<uval,mref,mref>{}, out<uval,mref>{},
                                    in_out<uval,mref,mref>{}, out<uval,mref>{});
-    auto col_scan = mngr.spawn_new(prog_colum, "lazy_segmented_scan", ndrange,
+    auto col_scan = mngr.spawn_new(prog_column, "lazy_segmented_scan", ndr,
                                    in_out<uval,mref,mref>{},
                                    in_out<uval,mref,mref>{});
+    auto col_conv = mngr.spawn_new(prog_column, "convert_heads", ndr,
+                                   in<uval,mref>{},
+                                   out<uval,mref>{same_size},
+                                   priv<uval,val>{});
     // scan
     auto lazy_scan = mngr.spawn_new(prog_es, "lazy_scan",
                                     spawn_config{dim_vec{1}},
@@ -618,79 +596,112 @@ void caf_main(actor_system& system, const config& cfg) {
                                     out<uval,mref>{k_two},
                                     priv<uval,val>{});
     // exclusive scan
-    auto es1 = mngr.spawn_new(prog_es, "es_phase_1", es_range_h,
+    auto es1 = mngr.spawn_new(prog_es, "es_phase_1", ndr_es_h,
                               in_out<uval, mref, mref>{},
                               out<uval,mref>{es_incs},
                               local<uval>{es_group_size * 2},
                               priv<uval, val>{});
-    auto es2 = mngr.spawn_new(prog_es, "es_phase_2", es_range_g,
+    auto es2 = mngr.spawn_new(prog_es, "es_phase_2", ndr_es_g,
                               in_out<uval,mref,mref>{},
                               in_out<uval,mref,mref>{},
                               priv<uval, val>{});
-    auto es3 = mngr.spawn_new(prog_es, "es_phase_3", es_range_h,
+    auto es3 = mngr.spawn_new(prog_es, "es_phase_3", ndr_es_h,
                               in_out<uval,mref,mref>{},
                               in<uval,mref>{},
                               priv<uval, val>{});
     // config for multi-level segmented scan
-    uval n_outer = n;
-    uval n_inner = get_size(n_outer) / half_block;
-    uval n_block = get_size(n_inner) / half_block;
-    // ---- ndranges ----
-    auto ndr_upsweep_01 = nd_conf(n_outer);
-    auto ndr_upsweep_02 = nd_conf(n_inner);
-    auto ndr_block = spawn_config{dim_vec{half_block}, {}, dim_vec{half_block}};
-    auto ndr_downsweep_02 = ndr_upsweep_02;
-    auto ndr_downsweep_01 = ndr_upsweep_01;
     // TODO: Reuse phase1 as phase2 and phase4 as phase5
-    auto phase1 = mngr.spawn_new(prog_sscan, "upsweep", ndr_upsweep_01,
-                                 in_out<uval,mref,mref>{},     // data
-                                 in_out<uval,mref,mref>{},     // partition
-                                 in_out<uval,mref,mref>{},     // tree
-                                 out<uval,mref>{reduced_ref},  // last_data
-                                 out<uval,mref>{reduced_ref},  // last_part
-                                 out<uval,mref>{reduced_ref},  // last_tree
-                                 local<uval>{half_block * 2},  // data buffer
-                                 local<uval>{half_block * 2},  // heads buffer
-                                 priv<uval, val>{});
-    auto phase2 = mngr.spawn_new(prog_sscan, "upsweep", ndr_upsweep_02,
-                                 in_out<uval,mref,mref>{},     // data
-                                 in_out<uval,mref,mref>{},     // partition
-                                 in_out<uval,mref,mref>{},     // tree
-                                 out<uval,mref>{reduced_ref},  // last_data
-                                 out<uval,mref>{reduced_ref},  // last_part
-                                 out<uval,mref>{reduced_ref},  // last_tree
-                                 local<uval>{half_block * 2},  // data buffer
-                                 local<uval>{half_block * 2},  // heads buffer
-                                 priv<uval, val>{});
-    auto phase3 = mngr.spawn_new(prog_sscan, "block_scan", ndr_block,
+    auto phase1 = mngr.spawn_new(
+      prog_sscan, "upsweep", ndr,
+      [nd_conf](spawn_config& conf, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, const uref&, const uref&, uval n) {
+          conf = nd_conf(n);
+        });
+        return std::move(msg);
+      },
+      in_out<uval,mref,mref>{},     // data
+      in_out<uval,mref,mref>{},     // partition
+      in_out<uval,mref,mref>{},     // tree
+      out<uval,mref>{reduced_ref},  // last_data
+      out<uval,mref>{reduced_ref},  // last_part
+      out<uval,mref>{reduced_ref},  // last_tree
+      local<uval>{half_block * 2},  // data buffer
+      local<uval>{half_block * 2},  // heads buffer
+      priv<uval, val>{}
+    );
+    auto phase2 = mngr.spawn_new(
+      prog_sscan, "upsweep", ndr,
+      [nd_conf](spawn_config& conf, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, const uref&, const uref&, uval n) {
+          conf = nd_conf(n);
+        });
+        return std::move(msg);
+      },
+      in_out<uval,mref,mref>{},     // data
+      in_out<uval,mref,mref>{},     // partition
+      in_out<uval,mref,mref>{},     // tree
+      out<uval,mref>{reduced_ref},  // last_data
+      out<uval,mref>{reduced_ref},  // last_part
+      out<uval,mref>{reduced_ref},  // last_tree
+      local<uval>{half_block * 2},  // data buffer
+      local<uval>{half_block * 2},  // heads buffer
+      priv<uval, val>{}
+    );
+    auto phase3 = mngr.spawn_new(prog_sscan, "block_scan",
+                                 spawn_config{dim_vec{half_block}, {},
+                                              dim_vec{half_block}},
                                  in_out<uval,mref,mref>{},     // data
                                  in_out<uval,mref,mref>{},     // partition
                                  in<uval,mref>{},              // tree
                                  priv<uval, val>{});           // length
-    auto phase4 = mngr.spawn_new(prog_sscan, "downsweep", ndr_downsweep_02,
-                                 in_out<uval,mref,mref>{},     // data
-                                 in_out<uval,mref,mref>{},     // partition
-                                 in<uval,mref>{},              // tree
-                                 in<uval,mref>{},              // last_data
-                                 in<uval,mref>{},              // last_partition
-                                 local<uval>{half_block * 2},  // data buffer
-                                 local<uval>{half_block * 2},  // part buffer
-                                 local<uval>{half_block * 2},  // tree buffer
-                                 priv<uval, val>{});
-    auto phase5 = mngr.spawn_new(prog_sscan, "downsweep", ndr_downsweep_01,
-                                 in_out<uval,mref,mref>{},     // data
-                                 in_out<uval,mref,mref>{},     // partition
-                                 in<uval,mref>{},              // tree
-                                 in<uval,mref>{},              // last_data
-                                 in<uval,mref>{},              // last_partition
-                                 local<uval>{half_block * 2},  // data buffer
-                                 local<uval>{half_block * 2},  // part buffer
-                                 local<uval>{half_block * 2},  // tree buffer
-                                 priv<uval, val>{});
-    auto convert = mngr.spawn_new(prog_sscan, "make_inclusive", ndr_upsweep_01,
-                                  in_out<uval, mref, mref>{},
-                                  in<uval, mref>{},
-                                  priv<uval, val>{});
+    auto phase4 = mngr.spawn_new(
+      prog_sscan, "downsweep", ndr,
+      [nd_conf](spawn_config& conf, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, const uref&, const uref&, const uref&,
+                      const uref&, uval n) {
+          conf = nd_conf(n);
+        });
+        return std::move(msg);
+      },
+      in_out<uval,mref,mref>{},     // data
+      in_out<uval,mref,mref>{},     // partition
+      in<uval,mref>{},              // tree
+      in<uval,mref>{},              // last_data
+      in<uval,mref>{},              // last_partition
+      local<uval>{half_block * 2},  // data buffer
+      local<uval>{half_block * 2},  // part buffer
+      local<uval>{half_block * 2},  // tree buffer
+      priv<uval, val>{}
+    );
+    auto phase5 = mngr.spawn_new(
+      prog_sscan, "downsweep", ndr,
+      [nd_conf](spawn_config& conf, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, const uref&, const uref&, const uref&,
+                      const uref&, uval n) {
+          conf = nd_conf(n);
+        });
+        return std::move(msg);
+      },
+      in_out<uval,mref,mref>{},     // data
+      in_out<uval,mref,mref>{},     // partition
+      in<uval,mref>{},              // tree
+      in<uval,mref>{},              // last_data
+      in<uval,mref>{},              // last_partition
+      local<uval>{half_block * 2},  // data buffer
+      local<uval>{half_block * 2},  // part buffer
+      local<uval>{half_block * 2},  // tree buffer
+      priv<uval, val>{}
+    );
+    auto convert = mngr.spawn_new(
+      prog_sscan, "make_inclusive", ndr,
+      [nd_conf](spawn_config& conf, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, const uref&, uval n) { conf = nd_conf(n); });
+        return std::move(msg);
+      },
+      in_out<uval, mref, mref>{},
+      in<uval, mref>{},
+      priv<uval, val>{}
+    );
     scoped_actor self{system};
 #ifdef SHOW_TIME_CONSUMPTION
     auto to = high_resolution_clock::now();
@@ -955,11 +966,11 @@ void caf_main(actor_system& system, const config& cfg) {
     es_global_range = round_up((es_m + 1) / 2, es_group_size);
     es_groups = (es_global_range / es_local_range);
     es_groups_rounded = round_up(es_groups, 128ul);
-    es_range_h = spawn_config{dim_vec{es_global_range}, {},
+    ndr_es_h = spawn_config{dim_vec{es_global_range}, {},
                               dim_vec{es_local_range}};
-    es_range_g = spawn_config{dim_vec{es_groups_rounded}, {},
+    ndr_es_g = spawn_config{dim_vec{es_groups_rounded}, {},
                               dim_vec{es_groups_rounded / 2}};
-    auto ndrange_2k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
+    auto ndr_2k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
     // auto expected_data = index_r.data();
     // auto data = *expected_data;
     // cout << "Now performing sc on data:" << endl;
@@ -973,7 +984,7 @@ void caf_main(actor_system& system, const config& cfg) {
     //                          << es_local_range << "]" << endl
     //      << "es range g:  [" << round_up(es_groups, es_local_range) << "], ["
     //                          << es_local_range << "]" << endl;
-    self->send(sc_count, ndrange_2k_128, index_r, 2 * k);
+    self->send(sc_count, ndr_2k_128, index_r, 2 * k);
     self->receive([&](uref& blocks, uref&) {
       blocks_r = blocks;
     });
@@ -983,17 +994,17 @@ void caf_main(actor_system& system, const config& cfg) {
     // for (auto val : data)
     //   cout << val << endl;
     // return;
-    self->send(es1, es_range_h, blocks_r, static_cast<uval>(es_m));
+    self->send(es1, ndr_es_h, blocks_r, static_cast<uval>(es_m));
     self->receive([&](uref& data, uref& increments) {
-      self->send(es2, es_range_g, data, increments, static_cast<uval>(es_groups));
+      self->send(es2, ndr_es_g, data, increments, static_cast<uval>(es_groups));
     });
     self->receive([&](uref& data, uref& increments) {
-      self->send(es3, es_range_h, data, increments, static_cast<uval>(es_m));
+      self->send(es3, ndr_es_h, data, increments, static_cast<uval>(es_m));
     });
     self->receive([&](const uref& results) {
       blocks_r = results;
     });
-    self->send(sc_move, ndrange_2k_128, index_r, index_r, blocks_r, 2 * k);
+    self->send(sc_move, ndr_2k_128, index_r, index_r, blocks_r, 2 * k);
     self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
       index_length = res[0];
       index_r = out;
@@ -1008,12 +1019,12 @@ void caf_main(actor_system& system, const config& cfg) {
     from = high_resolution_clock::now();
 #endif
 
-    // next step: compute_colum_length
-    auto ndrange_k = spawn_config{dim_vec{k}};
+    // next step: compute_column_length
+    auto ndr_k = spawn_config{dim_vec{k}};
     // temp  -> the tmp array used by the algorithm
     // heads -> stores the heads array for the stream compaction
     uref tmp_r;
-    self->send(col_prep, ndrange_k, chids_r, input_r);
+    self->send(col_prep, ndr_k, chids_r, input_r);
     self->receive([&](uref& chids, uref& tmp, uref& input, uref& heads) {
       chids_r = chids;
       tmp_r = tmp;
@@ -1026,47 +1037,43 @@ void caf_main(actor_system& system, const config& cfg) {
 //      heads_r = heads;
 //      tmp_r = tmp;
 //    });
-    // config for multi-level segmented scan
-    n_outer = tmp_r.size();
-    n_inner = get_size(n_outer) / half_block;
-    n_block = get_size(n_inner) / half_block;
-    // ---- ndranges ----
-    ndr_upsweep_01 = nd_conf(n_outer);
-    ndr_upsweep_02 = nd_conf(n_inner);
-    ndr_block = spawn_config{dim_vec{half_block}, {}, dim_vec{half_block}};
-    ndr_downsweep_02 = ndr_upsweep_02;
-    ndr_downsweep_01 = ndr_upsweep_01;
-    auto save_values = dev->copy(tmp_r);
-    auto save_heads = dev->copy(heads_r);
+    // --- segmented scan ---
+    auto values_copy = dev->copy(tmp_r);
+    auto heads_copy = dev->copy(heads_r);
     uref d, p, t, d2, p2, t2;
-    self->send(phase1, ndr_upsweep_01, tmp_r, heads_r, *save_heads, n_outer);
+    self->send(phase1, tmp_r, heads_r, *heads_copy,
+               static_cast<uval>(tmp_r.size()));
     self->receive([&](uref&      data, uref&      part, uref&      tree,
                       uref& last_data, uref& last_part, uref& last_tree) {
       d = data;
       p = part;
       t = tree;
-      self->send(phase2, ndr_upsweep_02, last_data, last_part, last_tree, n_inner);
+      self->send(phase2, last_data, last_part, last_tree,
+                 static_cast<uval>(last_data.size()));
     });
     self->receive([&](uref&      data, uref&      part, uref&      tree,
                       uref& last_data, uref& last_part, uref& last_tree) {
       d2 = data;
       p2 = part;
       t2 = tree;
-      self->send(phase3, ndr_block, last_data, last_part, last_tree, n_block);
+      self->send(phase3, last_data, last_part, last_tree, 
+                 static_cast<uval>(last_data.size()));
     });
     self->receive([&](uref& ld, uref& lp) {
-      self->send(phase4, ndr_downsweep_02, d2, p2, t2, ld, lp, n_inner);
+      self->send(phase4, d2, p2, t2, ld, lp, static_cast<uval>(d2.size()));
     });
     self->receive([&](uref& ld, uref& lp) {
-      self->send(phase5, ndr_downsweep_01, d, p, t, ld, lp, n_outer);
+      self->send(phase5, d, p, t, ld, lp, static_cast<uval>(d.size()));
     });
-    self->receive([&](const uref& results, const uref& /*partitions*/) {
-      self->send(convert, ndr_upsweep_01, results, std::move(*save_values), n_outer);
+    self->receive([&](const uref& results, const uref& /* partitions */) {
+      self->send(convert, results, std::move(*values_copy), 
+                 static_cast<uval>(results.size()));
     });
     self->receive([&](const uref& results) {
-      tmp_r = results; // ???????
+      tmp_r = results;
+      self->send(col_conv, nd_conf(results.size()), std::move(*heads_copy),
+                 static_cast<uval>(results.size()));
     });
-    self->send(merge_conv, ndr_upsweep_01, std::move(*save_heads), n_outer);
     self->receive([&](const uref& new_heads) {
       heads_r = new_heads;
     });
@@ -1074,35 +1081,35 @@ void caf_main(actor_system& system, const config& cfg) {
 
     wi = round_up(k, 128u);
     uval keycount = 0;
-    auto ndrange_k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
+    auto ndr_k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
     auto out_ref = dev->scratch_argument<uval>(k, buffer_type::output);
     // new calculations for scan actors
     es_m = wi / 128;
     es_global_range = round_up((es_m + 1) / 2, es_group_size);
     es_groups = (es_global_range / es_local_range);
     es_groups_rounded = round_up(es_groups, 128ul);
-    es_range_h = spawn_config{dim_vec{es_global_range}, {},
+    ndr_es_h = spawn_config{dim_vec{es_global_range}, {},
                               dim_vec{es_local_range}};
-    es_range_g = spawn_config{dim_vec{es_groups_rounded}, {},
+    ndr_es_g = spawn_config{dim_vec{es_groups_rounded}, {},
                               dim_vec{es_groups_rounded / 2}};
     // stream compaction
-    self->send(sc_count, ndrange_k_128, heads_r, k);
+    self->send(sc_count, ndr_k_128, heads_r, k);
     self->receive([&](uref& blocks, uref& heads) {
       blocks_r = blocks;
       heads_r = heads;
     });
     // cout << "Count step done." << endl;
-    self->send(es1, es_range_h, blocks_r, static_cast<uval>(es_m));
+    self->send(es1, ndr_es_h, blocks_r, static_cast<uval>(es_m));
     self->receive([&](uref& data, uref& increments) {
-      self->send(es2, es_range_g, data, increments, static_cast<uval>(es_groups));
+      self->send(es2, ndr_es_g, data, increments, static_cast<uval>(es_groups));
     });
     self->receive([&](uref& data, uref& increments) {
-      self->send(es3, es_range_h, data, increments, static_cast<uval>(es_m));
+      self->send(es3, ndr_es_h, data, increments, static_cast<uval>(es_m));
     });
     self->receive([&](const uref& results) {
       blocks_r = results;
     });
-    self->send(sc_move, ndrange_k_128, tmp_r, heads_r, blocks_r, k);
+    self->send(sc_move, ndr_k_128, tmp_r, heads_r, blocks_r, k);
     self->receive([&](uvec& data, uref&, uref& out, uref&, uref&) {
       keycount = data[0];
       heads_r = out;
@@ -1152,7 +1159,7 @@ void caf_main(actor_system& system, const config& cfg) {
     // create test offsets
     uvec test_offsets(test_k);
     uvec test_input_col{test_input};
-    auto test_keycount = compute_colum_length(test_input_col, test_chids_fuse,
+    auto test_keycount = compute_column_length(test_input_col, test_chids_fuse,
                                               test_offsets, test_k);
     cout << "Got " << keycount << " keys and expected " << test_keycount << "." << endl;
     valid_or_exit(test_keycount == keycount, "Offsets have different keycount.");
