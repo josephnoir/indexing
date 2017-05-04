@@ -170,7 +170,7 @@ kernel void es_phase_1(global uint* restrict data,
 }
 
 /// Global exclusive scan, phase 2.
-kernel void es_phase_2(global uint* restrict data,
+kernel void es_phase_2(global uint* restrict data, // not used ...
                        global uint* restrict increments,
                        uint len) {
   local uint tmp[2048];
