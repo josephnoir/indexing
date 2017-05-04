@@ -153,6 +153,9 @@ string decoded_bitmap(const uvec& bitmap) {
 }
 */
 
+template <class T, typename std::enable_if<is_integral<T>{}, int>::type = 0>
+uval as_uval(T val) { return static_cast<uval>(val); }
+
 /*****************************************************************************\
                      TESTS FUNCTIONS ON CPU FOR COMPARISON
 \*****************************************************************************/
@@ -448,25 +451,31 @@ void caf_main(actor_system& system, const config& cfg) {
                                dim_vec{es_local_range}};
   auto ndr_es_g = spawn_config{dim_vec{es_groups_rounded}, {},
                                  dim_vec{es_groups_rounded / 2}};
-  auto es_incs = [&](const uref&, uval n) -> size_t {
-    // calculate number of groups, depending on the group size from the input size
-    return (round_up((n + 1) / 2,
-            static_cast<uval>(es_group_size)) / es_group_size);
-  };
+//  auto es_incs = [&](const uref&, uval n) -> size_t {
+//    // calculate number of groups, depending on the group size from the input size
+//    return (round_up((n + 1) / 2, as_uval(es_group_size)) / es_group_size);
+//  };
   // segmented scan
   auto half_block = dev->get_max_work_group_size() / 2;
   auto get_size = [half_block](size_t n) -> size_t {
     return round_up((n + 1) / 2, half_block);
   };
-  auto nd_conf = [half_block, get_size](size_t dim) {
+  auto ndr_scan = [half_block, get_size](size_t dim) {
     return spawn_config{dim_vec{get_size(dim)}, {}, dim_vec{half_block}};
   };
+//  auto ndr_sc = [](uval dim) {
+//    auto wi = round_up(dim, 128u) / 128u;
+//    return spawn_config{dim_vec{wi}, {}, dim_vec{128}};
+//  };
   auto reduced_ref = [&](const uref&, const uref&, const uref&, uval n) {
     // calculate number of groups from the group size from the values size
     return size_t{get_size(n) / half_block};
   };
+  auto reduced_ref_scan = [&](const uref&, uval n) {
+    // calculate number of groups from the group size from the values size
+    return size_t{get_size(n) / half_block};
+  };
   auto same_size = [&](const uref&, uval n) { return size_t{n}; };
-
   // sort configuration
   // thread block has multiple thread groups has multiple threads
   // - blocks match to OpenCL work groups
@@ -511,7 +520,7 @@ void caf_main(actor_system& system, const config& cfg) {
     // sort rids ...
     auto rids_1 = mngr.spawn_new(prog_rids, "create_rids", ndr,
                                  in_out<uval,mref,mref>{}, out<uval,mref>{},
-                                 priv<uval>{static_cast<uval>(n)});
+                                 priv<uval>{as_uval(n)});
     // radix sort (by key)
     auto radix_zero = mngr.spawn_new(prog_radix, "zeroes", ndr_zero,
                                      in_out<uval,mref,mref>{});
@@ -556,7 +565,7 @@ void caf_main(actor_system& system, const config& cfg) {
                                    in_out<uval,mref,mref>{},
                                    local<uval>{128},
                                    priv<uval,val>{});
-    // sum operation is handled by es actors belows (exclusive scan)
+    // --> sum operation is handled by es actors belows (exclusive scan)
     auto sc_move = mngr.spawn_new(prog_sc, "moveValidElementsStaged",
                                   ndr_128,
                                   out<uval,val>{one},
@@ -596,26 +605,42 @@ void caf_main(actor_system& system, const config& cfg) {
                                     out<uval,mref>{k_two},
                                     priv<uval,val>{});
     // exclusive scan
-    auto es1 = mngr.spawn_new(prog_es, "es_phase_1", ndr_es_h,
-                              in_out<uval, mref, mref>{},
-                              out<uval,mref>{es_incs},
-                              local<uval>{es_group_size * 2},
-                              priv<uval, val>{});
-    auto es2 = mngr.spawn_new(prog_es, "es_phase_2", ndr_es_g,
-                              in_out<uval,mref,mref>{},
-                              in_out<uval,mref,mref>{},
-                              priv<uval, val>{});
-    auto es3 = mngr.spawn_new(prog_es, "es_phase_3", ndr_es_h,
-                              in_out<uval,mref,mref>{},
-                              in<uval,mref>{},
-                              priv<uval, val>{});
+    auto scan1 = mngr.spawn_new(
+      prog_es, "es_phase_1", ndr,
+      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, uval n) { conf = ndr_scan(n); });
+        return std::move(msg);
+      },
+      in_out<uval, mref, mref>{},
+      out<uval,mref>{reduced_ref_scan},
+      local<uval>{half_block * 2},
+      priv<uval, val>{}
+    );
+    auto scan2 = mngr.spawn_new(
+      prog_es, "es_phase_2",
+      spawn_config{dim_vec{half_block}, {}, dim_vec{half_block}},
+      in_out<uval,mref,mref>{},
+      in_out<uval,mref,mref>{},
+      priv<uval, val>{}
+    );
+    auto scan3 = mngr.spawn_new(
+      prog_es, "es_phase_3", ndr,
+      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, const uref&, uval n) {
+          conf = ndr_scan(n);
+        });
+        return std::move(msg);
+      },
+      in_out<uval,mref,mref>{},
+      in<uval,mref>{},
+      priv<uval, val>{}
+    );
     // config for multi-level segmented scan
-    // TODO: Reuse phase1 as phase2 and phase4 as phase5
-    auto phase1 = mngr.spawn_new(
+    auto seg_scan1 = mngr.spawn_new(
       prog_sscan, "upsweep", ndr,
-      [nd_conf](spawn_config& conf, message& msg) -> optional<message> {
+      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, uval n) {
-          conf = nd_conf(n);
+          conf = ndr_scan(n);
         });
         return std::move(msg);
       },
@@ -629,56 +654,21 @@ void caf_main(actor_system& system, const config& cfg) {
       local<uval>{half_block * 2},  // heads buffer
       priv<uval, val>{}
     );
-    auto phase2 = mngr.spawn_new(
-      prog_sscan, "upsweep", ndr,
-      [nd_conf](spawn_config& conf, message& msg) -> optional<message> {
-        msg.apply([&](const uref&, const uref&, const uref&, uval n) {
-          conf = nd_conf(n);
-        });
-        return std::move(msg);
-      },
-      in_out<uval,mref,mref>{},     // data
-      in_out<uval,mref,mref>{},     // partition
-      in_out<uval,mref,mref>{},     // tree
-      out<uval,mref>{reduced_ref},  // last_data
-      out<uval,mref>{reduced_ref},  // last_part
-      out<uval,mref>{reduced_ref},  // last_tree
-      local<uval>{half_block * 2},  // data buffer
-      local<uval>{half_block * 2},  // heads buffer
-      priv<uval, val>{}
-    );
-    auto phase3 = mngr.spawn_new(prog_sscan, "block_scan",
-                                 spawn_config{dim_vec{half_block}, {},
-                                              dim_vec{half_block}},
-                                 in_out<uval,mref,mref>{},     // data
-                                 in_out<uval,mref,mref>{},     // partition
-                                 in<uval,mref>{},              // tree
-                                 priv<uval, val>{});           // length
-    auto phase4 = mngr.spawn_new(
-      prog_sscan, "downsweep", ndr,
-      [nd_conf](spawn_config& conf, message& msg) -> optional<message> {
-        msg.apply([&](const uref&, const uref&, const uref&, const uref&,
-                      const uref&, uval n) {
-          conf = nd_conf(n);
-        });
-        return std::move(msg);
-      },
+    auto seg_scan2 = mngr.spawn_new(
+      prog_sscan, "block_scan",
+      spawn_config{dim_vec{half_block}, {},
+                   dim_vec{half_block}},
       in_out<uval,mref,mref>{},     // data
       in_out<uval,mref,mref>{},     // partition
       in<uval,mref>{},              // tree
-      in<uval,mref>{},              // last_data
-      in<uval,mref>{},              // last_partition
-      local<uval>{half_block * 2},  // data buffer
-      local<uval>{half_block * 2},  // part buffer
-      local<uval>{half_block * 2},  // tree buffer
-      priv<uval, val>{}
+      priv<uval, val>{}             // length
     );
-    auto phase5 = mngr.spawn_new(
+    auto seg_scan3 = mngr.spawn_new(
       prog_sscan, "downsweep", ndr,
-      [nd_conf](spawn_config& conf, message& msg) -> optional<message> {
+      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, const uref&,
                       const uref&, uval n) {
-          conf = nd_conf(n);
+          conf = ndr_scan(n);
         });
         return std::move(msg);
       },
@@ -694,8 +684,8 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     auto convert = mngr.spawn_new(
       prog_sscan, "make_inclusive", ndr,
-      [nd_conf](spawn_config& conf, message& msg) -> optional<message> {
-        msg.apply([&](const uref&, const uref&, uval n) { conf = nd_conf(n); });
+      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, const uref&, uval n) { conf = ndr_scan(n); });
         return std::move(msg);
       },
       in_out<uval, mref, mref>{},
@@ -710,7 +700,7 @@ void caf_main(actor_system& system, const config& cfg) {
     // kernel executions
     uref input_r = dev->global_argument(values);
 #ifdef SHOW_TIME_CONSUMPTION
-    dev.synchronize();
+    dev->synchronize();
     to = high_resolution_clock::now();
     cout << DESCRIPTION("Transfer to:\t\t")
          << duration_cast<microseconds>(to - from).count() << " us" << endl;
@@ -797,7 +787,7 @@ void caf_main(actor_system& system, const config& cfg) {
 #endif // WITH_CPU_TESTS
 
 #ifdef SHOW_TIME_CONSUMPTION
-    dev.synchronize();
+    dev->synchronize();
     //cout << "DONE: sort_rids_by_value" << endl;
     to = high_resolution_clock::now();
     cout << DESCRIPTION("Sort:\t\t\t")
@@ -845,7 +835,7 @@ void caf_main(actor_system& system, const config& cfg) {
 #endif // WITH_CPU_TESTS
 
 #ifdef SHOW_TIME_CONSUMPTION
-    dev.synchronize();
+    dev->synchronize();
     //cout << "DONE: produce_chunk_id_literals" << endl;
     to = high_resolution_clock::now();
     cout << DESCRIPTION("Chunks + literals:\t")
@@ -862,25 +852,24 @@ void caf_main(actor_system& system, const config& cfg) {
     // cout << "Created heads array" << endl;
     self->send(merge_scan, heads_r, lits_r);
     self->receive([&](uref&) { });
-    // cout << "Merged values" << endl;
+    cout << "Merged values" << endl;
     // stream compact inpt, chid, lits by heads value
     uref blocks_r;
-    uval len = static_cast<uval>(n);
+    uval len = as_uval(n);
     self->send(sc_count, heads_r, len);
     self->receive([&](uref& blocks, uref&) {
-      blocks_r = blocks;
+      self->send(scan1, blocks, as_uval(blocks.size()));
     });
-    self->send(es1, blocks_r, static_cast<uval>(es_m));
-    self->receive([&](uref& data, uref& increments) {
-      self->send(es2, data, increments, static_cast<uval>(es_groups));
+    self->receive([&](uref& data, uref& incs) {
+      self->send(scan2, data, incs, as_uval(incs.size()));
     });
-    self->receive([&](uref& data, uref& increments) {
-      self->send(es3, data, increments, static_cast<uval>(es_m));
+    self->receive([&](uref& data, uref& incs) {
+      self->send(scan3, data, incs, as_uval(data.size()));
     });
-    self->receive([&](const uref& results) {
-      blocks_r = results;
+    self->receive([&](uref& results) {
+      blocks_r = std::move(results);
     });
-    // cout << "Count step done." << endl;
+    cout << "Count step done." << endl;
     // TODO: Can we do this concurrently?
     self->send(sc_move, input_r, heads_r, blocks_r, len);
     self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
@@ -948,7 +937,7 @@ void caf_main(actor_system& system, const config& cfg) {
 #endif // WITH_CPU_TESTS
 
 #ifdef SHOW_TIME_CONSUMPTION
-    dev.synchronize();
+    dev->synchronize();
     // cout << "DONE: produce fills." << endl;
     to = high_resolution_clock::now();
     cout << DESCRIPTION("Produce fills:\t\t")
@@ -967,44 +956,23 @@ void caf_main(actor_system& system, const config& cfg) {
     es_groups = (es_global_range / es_local_range);
     es_groups_rounded = round_up(es_groups, 128ul);
     ndr_es_h = spawn_config{dim_vec{es_global_range}, {},
-                              dim_vec{es_local_range}};
+                            dim_vec{es_local_range}};
     ndr_es_g = spawn_config{dim_vec{es_groups_rounded}, {},
-                              dim_vec{es_groups_rounded / 2}};
+                            dim_vec{es_groups_rounded / 2}};
     auto ndr_2k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
-    // auto expected_data = index_r.data();
-    // auto data = *expected_data;
-    // cout << "Now performing sc on data:" << endl;
-    // for (auto val : data)
-    //   cout << val << endl;
-    // cout << "Config:" << endl;
-    // cout << "wi:          " << wi << endl
-    //      << "Count range: [" << wi << "], [" << 128 << "]" << endl
-    //      << "k:           " << k << endl
-    //      << "es range h:  [" << es_global_range << "], [" 
-    //                          << es_local_range << "]" << endl
-    //      << "es range g:  [" << round_up(es_groups, es_local_range) << "], ["
-    //                          << es_local_range << "]" << endl;
     self->send(sc_count, ndr_2k_128, index_r, 2 * k);
     self->receive([&](uref& blocks, uref&) {
-      blocks_r = blocks;
-    });
-    // cout << "Blocks to scan for sc: " << blocks_r.size() << ":" << endl;
-    // auto expected_data = blocks_r.data();
-    // auto data = *expected_data;
-    // for (auto val : data)
-    //   cout << val << endl;
-    // return;
-    self->send(es1, ndr_es_h, blocks_r, static_cast<uval>(es_m));
-    self->receive([&](uref& data, uref& increments) {
-      self->send(es2, ndr_es_g, data, increments, static_cast<uval>(es_groups));
+      self->send(scan1, blocks, as_uval(blocks.size()));
     });
     self->receive([&](uref& data, uref& increments) {
-      self->send(es3, ndr_es_h, data, increments, static_cast<uval>(es_m));
+      self->send(scan2, data, increments, as_uval(increments.size()));
+    });
+    self->receive([&](uref& data, uref& increments) {
+      self->send(scan3, data, increments, as_uval(data.size()));
     });
     self->receive([&](const uref& results) {
-      blocks_r = results;
+      self->send(sc_move, ndr_2k_128, index_r, index_r, results, 2 * k);
     });
-    self->send(sc_move, ndr_2k_128, index_r, index_r, blocks_r, 2 * k);
     self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
       index_length = res[0];
       index_r = out;
@@ -1041,42 +1009,52 @@ void caf_main(actor_system& system, const config& cfg) {
     auto values_copy = dev->copy(tmp_r);
     auto heads_copy = dev->copy(heads_r);
     uref d, p, t, d2, p2, t2;
-    self->send(phase1, tmp_r, heads_r, *heads_copy,
-               static_cast<uval>(tmp_r.size()));
+    self->send(seg_scan1, tmp_r, heads_r, *heads_copy,
+               as_uval(tmp_r.size()));
     self->receive([&](uref&      data, uref&      part, uref&      tree,
                       uref& last_data, uref& last_part, uref& last_tree) {
       d = data;
       p = part;
       t = tree;
-      self->send(phase2, last_data, last_part, last_tree,
-                 static_cast<uval>(last_data.size()));
+      self->send(seg_scan1, last_data, last_part, last_tree,
+                 as_uval(last_data.size()));
     });
     self->receive([&](uref&      data, uref&      part, uref&      tree,
                       uref& last_data, uref& last_part, uref& last_tree) {
       d2 = data;
       p2 = part;
       t2 = tree;
-      self->send(phase3, last_data, last_part, last_tree, 
-                 static_cast<uval>(last_data.size()));
+      self->send(seg_scan2, last_data, last_part, last_tree,
+                 as_uval(last_data.size()));
     });
     self->receive([&](uref& ld, uref& lp) {
-      self->send(phase4, d2, p2, t2, ld, lp, static_cast<uval>(d2.size()));
+      self->send(seg_scan3, d2, p2, t2, ld, lp, as_uval(d2.size()));
     });
     self->receive([&](uref& ld, uref& lp) {
-      self->send(phase5, d, p, t, ld, lp, static_cast<uval>(d.size()));
+      self->send(seg_scan3, d, p, t, ld, lp, as_uval(d.size()));
     });
     self->receive([&](const uref& results, const uref& /* partitions */) {
       self->send(convert, results, std::move(*values_copy), 
-                 static_cast<uval>(results.size()));
+                 as_uval(results.size()));
     });
     self->receive([&](const uref& results) {
       tmp_r = results;
-      self->send(col_conv, nd_conf(results.size()), std::move(*heads_copy),
-                 static_cast<uval>(results.size()));
+      self->send(col_conv, ndr_scan(results.size()), std::move(*heads_copy),
+                 as_uval(results.size()));
     });
     self->receive([&](const uref& new_heads) {
       heads_r = new_heads;
     });
+    auto heads_exp = heads_r.data();
+    auto ones = 0;
+    auto total = 0;
+    for (auto h : *heads_exp) {
+      if (h == 1) ++ones;
+      cout << h << " ";
+      ++total;
+    }
+    cout << endl << "Ones: " << ones << "!" << endl << endl;
+    cout << "Total entries: " << total << endl;
     // cout << "Col: scan done." << endl;
 
     wi = round_up(k, 128u);
@@ -1089,29 +1067,28 @@ void caf_main(actor_system& system, const config& cfg) {
     es_groups = (es_global_range / es_local_range);
     es_groups_rounded = round_up(es_groups, 128ul);
     ndr_es_h = spawn_config{dim_vec{es_global_range}, {},
-                              dim_vec{es_local_range}};
+                            dim_vec{es_local_range}};
     ndr_es_g = spawn_config{dim_vec{es_groups_rounded}, {},
-                              dim_vec{es_groups_rounded / 2}};
+                            dim_vec{es_groups_rounded / 2}};
     // stream compaction
     self->send(sc_count, ndr_k_128, heads_r, k);
     self->receive([&](uref& blocks, uref& heads) {
-      blocks_r = blocks;
+      self->send(scan1, ndr_es_h, blocks, as_uval(es_m));
       heads_r = heads;
     });
     // cout << "Count step done." << endl;
-    self->send(es1, ndr_es_h, blocks_r, static_cast<uval>(es_m));
     self->receive([&](uref& data, uref& increments) {
-      self->send(es2, ndr_es_g, data, increments, static_cast<uval>(es_groups));
+      self->send(scan2, ndr_es_g, data, increments, as_uval(es_groups));
     });
     self->receive([&](uref& data, uref& increments) {
-      self->send(es3, ndr_es_h, data, increments, static_cast<uval>(es_m));
+      self->send(scan3, ndr_es_h, data, increments, as_uval(es_m));
     });
     self->receive([&](const uref& results) {
-      blocks_r = results;
+      self->send(sc_move, ndr_k_128, tmp_r, heads_r, results, k);
     });
-    self->send(sc_move, ndr_k_128, tmp_r, heads_r, blocks_r, k);
     self->receive([&](uvec& data, uref&, uref& out, uref&, uref&) {
       keycount = data[0];
+      cout << "Keycount = " << keycount << endl;
       heads_r = out;
     });
     //cout << "Merge step done." << endl;
@@ -1125,7 +1102,7 @@ void caf_main(actor_system& system, const config& cfg) {
     //cout << "Lazy scan done." << endl;
 
 #ifdef SHOW_TIME_CONSUMPTION
-    dev.synchronize();
+    dev->synchronize();
     to = high_resolution_clock::now();
     cout << DESCRIPTION("Column length:\t\t")
          << duration_cast<microseconds>(to - from).count() << " us" << endl;
