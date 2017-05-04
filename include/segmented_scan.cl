@@ -24,12 +24,11 @@ kernel void upsweep(global uint* restrict data,
   const uint block = get_group_id(0);
   const uint threads_per_block = get_local_size(0);
   const uint elements_per_block = threads_per_block * 2;
-  const uint global_offset = block * elements_per_block;
   const uint n = elements_per_block;
   const uint e = 2 * thread;      // even
   const uint o = 2 * thread + 1;  // odd
-  const uint ge = 2 * x;          // was: global_offset + e
-  const uint go = 2 * x + 1;      // was: global_offset + o
+  const uint ge = 2 * x;
+  const uint go = 2 * x + 1;
   d[e] = (ge < len) ? data[ge] : 0;
   d[o] = (go < len) ? data[go] : 0;
   p[e] = (ge < len) ? part[ge] : 0;
@@ -151,12 +150,11 @@ kernel void downsweep(global uint* restrict data,
   const uint block = get_group_id(0);
   const uint threads_per_block = get_local_size(0);
   const uint elements_per_block = threads_per_block * 2;
-  const uint global_offset = block * elements_per_block;
   const uint n = elements_per_block;
   const uint e = 2 * thread;
   const uint o = 2 * thread + 1;
-  const uint ge = 2 * x;     // global_offset + e
-  const uint go = 2 * x + 1; // global_offset + o
+  const uint ge = 2 * x;
+  const uint go = 2 * x + 1;
   // Load data into local memory
   d[e] = (ge < len) ? data[ge] : 0;
   d[o] = (go < len) ? data[go] : 0;

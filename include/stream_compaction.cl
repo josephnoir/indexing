@@ -28,6 +28,9 @@
  *               converted to OpenCL by Peter Eastman
  * Affiliation:  Stanford University
  * License:      Public Domain
+ *
+ * For the indexing algorithm we implemented a separate scan (scan.cl) which is
+ * now used for phase 2.
  */
 
 #define N 128
@@ -133,18 +136,6 @@ kernel void moveValidElementsStaged(global       uint* restrict result,
   uint lsize = get_local_size(0);
   local uint dsLocalIndex[256];
   uint blockOutOffset = 0;
-  // for (uint base = 0; base < gidx; base += lsize) {
-  //   // Load up the count of valid elements for each block before us
-  //   // in batches of 128
-  //   if ((base + idx) < gidx)
-  //     validBlock[idx] = dgBlockCounts[base + idx];
-  //   else
-  //     validBlock[idx] = 0;
-  //   barrier(CLK_LOCAL_MEM_FENCE);
-  //   // Parallel reduce these counts, accumulate in the final offset variable
-  //   blockOutOffset += sumReduce128(validBlock);
-  //   barrier(CLK_LOCAL_MEM_FENCE);
-  // }
   blockOutOffset = dgBlockCounts[gidx];
   const uint epb = len / ngrps + ((len % ngrps) ? 1 : 0);
   const uint ub = (len < (gidx + 1) * epb) ? len : ((gidx + 1) * epb);
