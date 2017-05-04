@@ -1,5 +1,5 @@
 /******************************************************************************
- * function: compute_column_length                                             *
+ * function: compute_column_length                                            *
  * input:                                                                     *
  * output:                                                                    *
  ******************************************************************************/
@@ -21,10 +21,11 @@
  * (There is probably a more efficient solution for segmented scan)
  */
 
-kernel void column_prepare(global uint* restrict chids,
-                           global uint* restrict tmp,
-                           global uint* restrict input,
-                           global uint* restrict heads) {
+kernel void column_prepare(global const uint* restrict chids,
+                           global       uint* restrict tmp,
+                           global const uint* restrict input,
+                           global       uint* restrict heads,
+                           uint len) {
   uint idx = get_global_id(0);
   tmp[idx] = 1 + (chids[idx] != 0);
   // create heads array for next steps
@@ -33,8 +34,8 @@ kernel void column_prepare(global uint* restrict chids,
 
 // somewhat inefficient segmented scan (not really a scan as it stores the
 // accumulated value at the beginning of the segment)
-kernel void lazy_segmented_scan(global uint* restrict heads,
-                                global uint* restrict data) {
+kernel void lazy_segmented_scan(global const uint* restrict heads,
+                                global       uint* restrict data) {
   uint idx = get_global_id(0);
   uint maximum = get_global_size(0);
   if (heads[idx] != 0) {

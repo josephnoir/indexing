@@ -431,26 +431,11 @@ void caf_main(actor_system& system, const config& cfg) {
   // configuration parameters
   auto n = values.size();
   auto ndr = spawn_config{dim_vec{n}};
-  auto wi = round_up(n, 128ul);
-  auto ndr_128  = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
   // TODO: not a nice solution, need some better approach
-  auto wi_two = [&](uref&, uval&) { return size_t{wi / 128}; };
-  auto k_once = [](uref&, uref&, uref&, uval k) { return size_t{k}; };
   auto one = [](uref&, uref&, uref&, uval) { return size_t{1}; };
   auto k_double = [](uref&, uref&, uval k) { return size_t{2 * k}; };
   auto k_two = [](uref&, uval k) { return size_t{k}; };
   auto fills_k = [](uref&, uref&, uval k) { return size_t{k}; };
-  // exclusive scan
-  auto es_m = wi / 128;
-  size_t es_group_size = 128;
-  size_t es_global_range = round_up((es_m + 1) / 2, es_group_size);
-  size_t es_local_range = es_group_size;
-  size_t es_groups = (es_global_range / es_local_range);
-  size_t es_groups_rounded = round_up(es_groups, 128ul);
-  auto ndr_es_h = spawn_config{dim_vec{es_global_range}, {},
-                               dim_vec{es_local_range}};
-  auto ndr_es_g = spawn_config{dim_vec{es_groups_rounded}, {},
-                                 dim_vec{es_groups_rounded / 2}};
 //  auto es_incs = [&](const uref&, uval n) -> size_t {
 //    // calculate number of groups, depending on the group size from the input size
 //    return (round_up((n + 1) / 2, as_uval(es_group_size)) / es_group_size);
@@ -463,18 +448,21 @@ void caf_main(actor_system& system, const config& cfg) {
   auto ndr_scan = [half_block, get_size](size_t dim) {
     return spawn_config{dim_vec{get_size(dim)}, {}, dim_vec{half_block}};
   };
-//  auto ndr_sc = [](uval dim) {
-//    auto wi = round_up(dim, 128u) / 128u;
-//    return spawn_config{dim_vec{wi}, {}, dim_vec{128}};
-//  };
-  auto reduced_ref = [&](const uref&, const uref&, const uref&, uval n) {
+  auto ndr_compact = [](uval dim) {
+    return spawn_config{dim_vec{round_up(dim, 128u)}, {}, dim_vec{128}};
+  };
+  auto reduced_scan = [&](const uref&, uval n) {
     // calculate number of groups from the group size from the values size
     return size_t{get_size(n) / half_block};
   };
-  auto reduced_ref_scan = [&](const uref&, uval n) {
+  auto reduced_sscan = [&](const uref&, const uref&, const uref&, uval n) {
     // calculate number of groups from the group size from the values size
     return size_t{get_size(n) / half_block};
   };
+  auto reduced_compact = [](const uref&, uval n) {
+    return size_t{round_up(n, 128u) / 128u};
+  };
+  auto k_compact = [](uref&, uref&, uref&, uval k) { return size_t{k}; };
   auto same_size = [&](const uref&, uval n) { return size_t{n}; };
   // sort configuration
   // thread block has multiple thread groups has multiple threads
@@ -521,7 +509,7 @@ void caf_main(actor_system& system, const config& cfg) {
     auto rids_1 = mngr.spawn_new(prog_rids, "create_rids", ndr,
                                  in_out<uval,mref,mref>{}, out<uval,mref>{},
                                  priv<uval>{as_uval(n)});
-    // radix sort (by key)
+    // ---- radix sort (by key) ----
     auto radix_zero = mngr.spawn_new(prog_radix, "zeroes", ndr_zero,
                                      in_out<uval,mref,mref>{});
     auto radix_count = mngr.spawn_new(prog_radix, "count", ndr_radix,
@@ -547,11 +535,10 @@ void caf_main(actor_system& system, const config& cfg) {
                                      local<uval>{radices},
                                      priv<radix_config>{rc},
                                      priv<uval,val>{});
-    // produce chuncks ...
+    // ---- produce chuncks ----
     auto chunks = mngr.spawn_new(prog_chunks, "produce_chunks", ndr,
                                  in_out<uval,mref,mref>{},
                                  out<uval,mref>{}, out<uval,mref>{});
-    // <uvec, uvec, uvec>
     auto merge_heads = mngr.spawn_new(prog_merge, "create_heads", ndr,
                                       in_out<uval,mref,mref>{},
                                       in_out<uval,mref,mref>{},
@@ -560,45 +547,81 @@ void caf_main(actor_system& system, const config& cfg) {
                                      in<uval,mref>{},
                                      in_out<uval,mref,mref>{});
     // stream compaction
-    auto sc_count = mngr.spawn_new(prog_sc,"countElts", ndr_128,
-                                   out<uval,mref>{wi_two},
-                                   in_out<uval,mref,mref>{},
-                                   local<uval>{128},
-                                   priv<uval,val>{});
+    auto sc_count = mngr.spawn_new(
+      prog_sc,"countElts", ndr,
+      [ndr_compact](spawn_config& conf, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, uval n) { conf = ndr_compact(n); });
+        return std::move(msg);
+      },
+      out<uval,mref>{reduced_compact},
+      in_out<uval,mref,mref>{},
+      local<uval>{128},
+      priv<uval,val>{}
+    );
     // --> sum operation is handled by es actors belows (exclusive scan)
-    auto sc_move = mngr.spawn_new(prog_sc, "moveValidElementsStaged",
-                                  ndr_128,
-                                  out<uval,val>{one},
-                                  in_out<uval,mref,mref>{},
-                                  out<uval,mref>{k_once},
-                                  in_out<uval,mref,mref>{},
-                                  in_out<uval,mref,mref>{},
-                                  local<uval>{128},
-                                  local<uval>{128},
-                                  local<uval>{128},
-                                  priv<uval,val>{});
-    // produce fills
-    auto fills = mngr.spawn_new(prog_fills, "produce_fills", ndr,
-                                in<uval,mref>{},in<uval,mref>{},
-                                out<uval,mref>{fills_k},
-                                priv<uval,val>{});
-    // fuse fill & literals
-    auto fuse_prep = mngr.spawn_new(prog_fuse, "prepare_index", ndr,
-                                    in<uval,mref>{},in<uval,mref>{},
-                                    out<uval,mref>{k_double},
-                                    priv<uval,val>{});
+    auto sc_move = mngr.spawn_new(
+      prog_sc, "moveValidElementsStaged", ndr,
+      [ndr_compact](spawn_config& conf, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, const uref&, const uref&, uval n) {
+          conf = ndr_compact(n);
+        });
+        return std::move(msg);
+      },
+      out<uval,val>{one},
+      in_out<uval,mref,mref>{},
+      out<uval,mref>{k_compact},
+      in_out<uval,mref,mref>{},
+      in_out<uval,mref,mref>{},
+      local<uval>{128},
+      local<uval>{128},
+      local<uval>{128},
+      priv<uval,val>{}
+    );
+    // ---- produce fills -----
+    auto fills = mngr.spawn_new(
+      prog_fills, "produce_fills", ndr,
+      in<uval,mref>{},in<uval,mref>{},
+      out<uval,mref>{fills_k},
+      priv<uval,val>{}
+    );
+    // ---- fuse fill & literals ----
+    auto fuse_prep = mngr.spawn_new(
+      prog_fuse, "prepare_index", ndr,
+      in<uval,mref>{},in<uval,mref>{},
+      out<uval,mref>{k_double},
+      priv<uval,val>{}
+    );
     // compute column length
-    auto col_prep = mngr.spawn_new(prog_column, "column_prepare", ndr,
-                                   in_out<uval,mref,mref>{}, out<uval,mref>{},
-                                   in_out<uval,mref,mref>{}, out<uval,mref>{});
-    auto col_scan = mngr.spawn_new(prog_column, "lazy_segmented_scan", ndr,
-                                   in_out<uval,mref,mref>{},
-                                   in_out<uval,mref,mref>{});
-    auto col_conv = mngr.spawn_new(prog_column, "convert_heads", ndr,
-                                   in<uval,mref>{},
-                                   out<uval,mref>{same_size},
-                                   priv<uval,val>{});
-    // scan
+    auto col_prep = mngr.spawn_new(
+      prog_column, "column_prepare", ndr,
+      [ndr_compact](spawn_config& conf, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, const uref&, uval n) {
+          conf = spawn_config{dim_vec{n}};
+        });
+        return std::move(msg);
+      },
+      in_out<uval,mref,mref>{},
+      out<uval,mref>{},
+      in_out<uval,mref,mref>{},
+      out<uval,mref>{},
+      priv<uval,val>{}
+    );
+//    auto col_scan = mngr.spawn_new(
+//      prog_column, "lazy_segmented_scan", ndr,
+//      in_out<uval,mref,mref>{},
+//      in_out<uval,mref,mref>{}
+//    );
+    auto col_conv = mngr.spawn_new(
+      prog_column, "convert_heads", ndr,
+      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, uval n) { conf = ndr_scan(n); });
+        return std::move(msg);
+      },
+      in<uval,mref>{},
+      out<uval,mref>{same_size},
+      priv<uval,val>{}
+    );
+    // scan, TODO: exchange this for something better.
     auto lazy_scan = mngr.spawn_new(prog_es, "lazy_scan",
                                     spawn_config{dim_vec{1}},
                                     in<uval,mref>{},
@@ -612,7 +635,7 @@ void caf_main(actor_system& system, const config& cfg) {
         return std::move(msg);
       },
       in_out<uval, mref, mref>{},
-      out<uval,mref>{reduced_ref_scan},
+      out<uval,mref>{reduced_scan},
       local<uval>{half_block * 2},
       priv<uval, val>{}
     );
@@ -647,9 +670,9 @@ void caf_main(actor_system& system, const config& cfg) {
       in_out<uval,mref,mref>{},     // data
       in_out<uval,mref,mref>{},     // partition
       in_out<uval,mref,mref>{},     // tree
-      out<uval,mref>{reduced_ref},  // last_data
-      out<uval,mref>{reduced_ref},  // last_part
-      out<uval,mref>{reduced_ref},  // last_tree
+      out<uval,mref>{reduced_sscan},  // last_data
+      out<uval,mref>{reduced_sscan},  // last_part
+      out<uval,mref>{reduced_sscan},  // last_tree
       local<uval>{half_block * 2},  // data buffer
       local<uval>{half_block * 2},  // heads buffer
       priv<uval, val>{}
@@ -738,13 +761,16 @@ void caf_main(actor_system& system, const config& cfg) {
           std::swap(r_values_in, r_values_out);
         }
         self->send(radix_zero, r_counters);
-        self->receive([&](uref& /*counters*/) { });
-        self->send(radix_count, r_keys_in, r_counters, offset);
-        self->receive([&](uref& /*k*/, uref& /*c*/) { });
-        self->send(radix_scan, r_keys_in, r_counters, r_prefixes, offset);
-        self->receive([&](uref& /*k*/, uref& /*c*/, uref& /*p*/) { });
-        self->send(radix_move, r_keys_in, r_keys_out, r_values_in, r_values_out,
-                               r_counters, r_prefixes, offset);
+        self->receive([&](uref& /*counters*/) {
+          self->send(radix_count, r_keys_in, r_counters, offset);
+        });
+        self->receive([&](uref& /*k*/, uref& /*c*/) {
+          self->send(radix_scan, r_keys_in, r_counters, r_prefixes, offset);
+        });
+        self->receive([&](uref& /*k*/, uref& /*c*/, uref& /*p*/) {
+          self->send(radix_move, r_keys_in, r_keys_out, r_values_in, r_values_out,
+                                 r_counters, r_prefixes, offset);
+        });
         self->receive([&](uref& /*ki*/, uref& /*ko*/, uref& /*vi*/, uref& /*vo*/,
                           uref& /*c*/, uref& /*p*/) { });
       }
@@ -852,7 +878,7 @@ void caf_main(actor_system& system, const config& cfg) {
     // cout << "Created heads array" << endl;
     self->send(merge_scan, heads_r, lits_r);
     self->receive([&](uref&) { });
-    cout << "Merged values" << endl;
+    //cout << "Merged values" << endl;
     // stream compact inpt, chid, lits by heads value
     uref blocks_r;
     uval len = as_uval(n);
@@ -869,7 +895,7 @@ void caf_main(actor_system& system, const config& cfg) {
     self->receive([&](uref& results) {
       blocks_r = std::move(results);
     });
-    cout << "Count step done." << endl;
+    //cout << "Count step done." << endl;
     // TODO: Can we do this concurrently?
     self->send(sc_move, input_r, heads_r, blocks_r, len);
     self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
@@ -949,18 +975,8 @@ void caf_main(actor_system& system, const config& cfg) {
     size_t index_length = 0;
     self->send(fuse_prep, spawn_config{dim_vec{k}}, chids_r, lits_r, k);
     self->receive([&](uref& index) { index_r = index; });
-    wi = round_up(2 * k, 128u);
     // new calculactions for scan
-    es_m = wi / 128;
-    es_global_range = round_up((es_m + 1) / 2, es_group_size);
-    es_groups = (es_global_range / es_local_range);
-    es_groups_rounded = round_up(es_groups, 128ul);
-    ndr_es_h = spawn_config{dim_vec{es_global_range}, {},
-                            dim_vec{es_local_range}};
-    ndr_es_g = spawn_config{dim_vec{es_groups_rounded}, {},
-                            dim_vec{es_groups_rounded / 2}};
-    auto ndr_2k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
-    self->send(sc_count, ndr_2k_128, index_r, 2 * k);
+    self->send(sc_count, index_r, 2 * k);
     self->receive([&](uref& blocks, uref&) {
       self->send(scan1, blocks, as_uval(blocks.size()));
     });
@@ -971,7 +987,7 @@ void caf_main(actor_system& system, const config& cfg) {
       self->send(scan3, data, increments, as_uval(data.size()));
     });
     self->receive([&](const uref& results) {
-      self->send(sc_move, ndr_2k_128, index_r, index_r, results, 2 * k);
+      self->send(sc_move, index_r, index_r, results, 2 * k);
     });
     self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
       index_length = res[0];
@@ -988,11 +1004,10 @@ void caf_main(actor_system& system, const config& cfg) {
 #endif
 
     // next step: compute_column_length
-    auto ndr_k = spawn_config{dim_vec{k}};
     // temp  -> the tmp array used by the algorithm
     // heads -> stores the heads array for the stream compaction
     uref tmp_r;
-    self->send(col_prep, ndr_k, chids_r, input_r);
+    self->send(col_prep, chids_r, input_r, as_uval(k));
     self->receive([&](uref& chids, uref& tmp, uref& input, uref& heads) {
       chids_r = chids;
       tmp_r = tmp;
@@ -1000,6 +1015,7 @@ void caf_main(actor_system& system, const config& cfg) {
       heads_r = heads;
     });
     // cout << "Col: prepare done." << endl;
+// Following code was replaced with the segmented scan + the conversion kernel
 //    self->send(col_scan, ndrange_k, heads_r, tmp_r);
 //    self->receive([&](uref& heads, uref& tmp) {
 //      heads_r = heads;
@@ -1039,56 +1055,32 @@ void caf_main(actor_system& system, const config& cfg) {
     });
     self->receive([&](const uref& results) {
       tmp_r = results;
-      self->send(col_conv, ndr_scan(results.size()), std::move(*heads_copy),
-                 as_uval(results.size()));
+      self->send(col_conv, std::move(*heads_copy), k);
     });
     self->receive([&](const uref& new_heads) {
       heads_r = new_heads;
     });
-    auto heads_exp = heads_r.data();
-    auto ones = 0;
-    auto total = 0;
-    for (auto h : *heads_exp) {
-      if (h == 1) ++ones;
-      cout << h << " ";
-      ++total;
-    }
-    cout << endl << "Ones: " << ones << "!" << endl << endl;
-    cout << "Total entries: " << total << endl;
     // cout << "Col: scan done." << endl;
 
-    wi = round_up(k, 128u);
     uval keycount = 0;
-    auto ndr_k_128 = spawn_config{dim_vec{wi}, {}, dim_vec{128}};
-    auto out_ref = dev->scratch_argument<uval>(k, buffer_type::output);
-    // new calculations for scan actors
-    es_m = wi / 128;
-    es_global_range = round_up((es_m + 1) / 2, es_group_size);
-    es_groups = (es_global_range / es_local_range);
-    es_groups_rounded = round_up(es_groups, 128ul);
-    ndr_es_h = spawn_config{dim_vec{es_global_range}, {},
-                            dim_vec{es_local_range}};
-    ndr_es_g = spawn_config{dim_vec{es_groups_rounded}, {},
-                            dim_vec{es_groups_rounded / 2}};
     // stream compaction
-    self->send(sc_count, ndr_k_128, heads_r, k);
+    self->send(sc_count, heads_r, k);
     self->receive([&](uref& blocks, uref& heads) {
-      self->send(scan1, ndr_es_h, blocks, as_uval(es_m));
+      self->send(scan1, blocks, k);
       heads_r = heads;
     });
     // cout << "Count step done." << endl;
-    self->receive([&](uref& data, uref& increments) {
-      self->send(scan2, ndr_es_g, data, increments, as_uval(es_groups));
+    self->receive([&](uref& data, uref& incs) {
+      self->send(scan2, data, incs, as_uval(incs.size()));
     });
-    self->receive([&](uref& data, uref& increments) {
-      self->send(scan3, ndr_es_h, data, increments, as_uval(es_m));
+    self->receive([&](uref& data, uref& incs) {
+      self->send(scan3, data, incs, k);
     });
     self->receive([&](const uref& results) {
-      self->send(sc_move, ndr_k_128, tmp_r, heads_r, results, k);
+      self->send(sc_move, tmp_r, heads_r, results, k);
     });
-    self->receive([&](uvec& data, uref&, uref& out, uref&, uref&) {
-      keycount = data[0];
-      cout << "Keycount = " << keycount << endl;
+    self->receive([&](uvec& count, uref&, uref& out, uref&, uref&) {
+      keycount = count[0];
       heads_r = out;
     });
     //cout << "Merge step done." << endl;
@@ -1129,8 +1121,8 @@ void caf_main(actor_system& system, const config& cfg) {
     uvec test_chids_fuse{test_chids_produce};
     auto test_index_length = fuse_fill_literals(test_chids_fuse, test_lits,
                                                 test_index, test_k);
-    cout << "Got index length " << index_length << ", test calculated "
-         << test_index_length << "." << endl;
+//    cout << "Got index length " << index_length << ", test calculated "
+//         << test_index_length << "." << endl;
     valid_or_exit(test_index_length == index_length, "Index lengths don't match");
     valid_or_exit(index == test_index, "Indexes differ.");
     // create test offsets
@@ -1138,7 +1130,7 @@ void caf_main(actor_system& system, const config& cfg) {
     uvec test_input_col{test_input};
     auto test_keycount = compute_column_length(test_input_col, test_chids_fuse,
                                               test_offsets, test_k);
-    cout << "Got " << keycount << " keys and expected " << test_keycount << "." << endl;
+//    cout << "Got " << keycount << " keys and expected " << test_keycount << "." << endl;
     valid_or_exit(test_keycount == keycount, "Offsets have different keycount.");
     valid_or_exit(offsets == test_offsets, "Offsets differ.");
     cout << "Run included tests of calculated data." << endl
