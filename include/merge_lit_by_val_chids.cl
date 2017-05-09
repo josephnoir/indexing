@@ -65,6 +65,6 @@ kernel void convert_heads(global const uint* restrict in,
   const uint thread = get_global_id(0);
   const uint even = 2 * thread;
   const uint odd  = 2 * thread + 1;
-  if (even < len) out[even] = (even + 1) < len ? in[even + 1] : 1;
-  if (odd  < len) out[odd ] = (odd  + 1) < len ? in[odd  + 1] : 1;
+  if (even < len) out[even] = (even == len - 1) ? 1 : in[even + 1];
+  if (odd  < len) out[odd ] = (odd  == len - 1) ? 1 : in[odd  + 1];
 }

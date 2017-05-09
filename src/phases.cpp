@@ -19,7 +19,7 @@
 
 #include "caf/opencl/all.hpp"
 
-#define WITH_CPU_TESTS
+//#define WITH_CPU_TESTS
 #define SHOW_TIME_CONSUMPTION
 #define WITH_DESCRIPTION
 #ifdef WITH_CPU_TESTS
@@ -445,11 +445,18 @@ void caf_main(actor_system& system, const config& cfg) {
   auto get_size = [half_block](size_t n) -> size_t {
     return round_up((n + 1) / 2, half_block);
   };
-  auto ndr_scan = [half_block, get_size](size_t dim) {
-    return spawn_config{dim_vec{get_size(dim)}, {}, dim_vec{half_block}};
+  auto half_size_for = [](size_t n, size_t block) -> size_t {
+    return round_up((n + 1) / 2, block);
+  };
+  auto ndr_scan = [half_size_for, half_block](size_t dim) {
+    return spawn_config{dim_vec{half_size_for(dim,half_block)}, {},
+                                dim_vec{half_block}};
   };
   auto ndr_compact = [](uval dim) {
     return spawn_config{dim_vec{round_up(dim, 128u)}, {}, dim_vec{128}};
+  };
+  auto ndr_block = [half_size_for](uval n, uval block) {
+    return spawn_config{dim_vec{half_size_for(n, block)}, {}, dim_vec{block}};
   };
   auto reduced_scan = [&](const uref&, uval n) {
     // calculate number of groups from the group size from the values size
@@ -594,23 +601,18 @@ void caf_main(actor_system& system, const config& cfg) {
     // compute column length
     auto col_prep = mngr.spawn_new(
       prog_column, "column_prepare", ndr,
-      [ndr_compact](spawn_config& conf, message& msg) -> optional<message> {
+      [ndr_block](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, uval n) {
-          conf = spawn_config{dim_vec{n}};
+          conf = ndr_block(n, 512);
         });
         return std::move(msg);
       },
       in_out<uval,mref,mref>{},
-      out<uval,mref>{},
       in_out<uval,mref,mref>{},
+      out<uval,mref>{},
       out<uval,mref>{},
       priv<uval,val>{}
     );
-//    auto col_scan = mngr.spawn_new(
-//      prog_column, "lazy_segmented_scan", ndr,
-//      in_out<uval,mref,mref>{},
-//      in_out<uval,mref,mref>{}
-//    );
     auto col_conv = mngr.spawn_new(
       prog_column, "convert_heads", ndr,
       [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
@@ -621,12 +623,6 @@ void caf_main(actor_system& system, const config& cfg) {
       out<uval,mref>{same_size},
       priv<uval,val>{}
     );
-    // scan, TODO: exchange this for something better.
-    auto lazy_scan = mngr.spawn_new(prog_es, "lazy_scan",
-                                    spawn_config{dim_vec{1}},
-                                    in<uval,mref>{},
-                                    out<uval,mref>{k_two},
-                                    priv<uval,val>{});
     // exclusive scan
     auto scan1 = mngr.spawn_new(
       prog_es, "es_phase_1", ndr,
@@ -705,7 +701,7 @@ void caf_main(actor_system& system, const config& cfg) {
       local<uval>{half_block * 2},  // tree buffer
       priv<uval, val>{}
     );
-    auto convert = mngr.spawn_new(
+    auto make_inclusive = mngr.spawn_new(
       prog_sscan, "make_inclusive", ndr,
       [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, uval n) { conf = ndr_scan(n); });
@@ -996,6 +992,7 @@ void caf_main(actor_system& system, const config& cfg) {
     });
 
 #ifdef SHOW_TIME_CONSUMPTION
+    dev->synchronize();
     //cout << "DONE: fuse_fill_literals." << endl;
     to = high_resolution_clock::now();
     cout << DESCRIPTION("Fuse:\t\t\t")
@@ -1007,20 +1004,18 @@ void caf_main(actor_system& system, const config& cfg) {
     // temp  -> the tmp array used by the algorithm
     // heads -> stores the heads array for the stream compaction
     uref tmp_r;
+    auto tc1 = high_resolution_clock::now();
     self->send(col_prep, chids_r, input_r, as_uval(k));
-    self->receive([&](uref& chids, uref& tmp, uref& input, uref& heads) {
-      chids_r = chids;
-      tmp_r = tmp;
-      input_r = input;
-      heads_r = heads;
+    self->receive([&](uref& chids, uref& input, uref& tmp, uref& heads) {
+      chids_r = move(chids);
+      input_r = move(input);
+      tmp_r = move(tmp);
+      heads_r = move(heads);
     });
+    dev->synchronize();
+    auto tc2 = high_resolution_clock::now();
+
     // cout << "Col: prepare done." << endl;
-// Following code was replaced with the segmented scan + the conversion kernel
-//    self->send(col_scan, ndrange_k, heads_r, tmp_r);
-//    self->receive([&](uref& heads, uref& tmp) {
-//      heads_r = heads;
-//      tmp_r = tmp;
-//    });
     // --- segmented scan ---
     auto values_copy = dev->copy(tmp_r);
     auto heads_copy = dev->copy(heads_r);
@@ -1050,16 +1045,22 @@ void caf_main(actor_system& system, const config& cfg) {
       self->send(seg_scan3, d, p, t, ld, lp, as_uval(d.size()));
     });
     self->receive([&](const uref& results, const uref& /* partitions */) {
-      self->send(convert, results, std::move(*values_copy), 
+      self->send(make_inclusive, results, std::move(*values_copy),
                  as_uval(results.size()));
     });
+    dev->synchronize();
+    auto tc3 = high_resolution_clock::now();
     self->receive([&](const uref& results) {
       tmp_r = results;
       self->send(col_conv, std::move(*heads_copy), k);
     });
+    dev->synchronize();
+    auto tc4 = high_resolution_clock::now();
     self->receive([&](const uref& new_heads) {
       heads_r = new_heads;
     });
+    dev->synchronize();
+    auto tc5 = high_resolution_clock::now();
     // cout << "Col: scan done." << endl;
 
     uval keycount = 0;
@@ -1084,20 +1085,41 @@ void caf_main(actor_system& system, const config& cfg) {
       heads_r = out;
     });
     //cout << "Merge step done." << endl;
+    dev->synchronize();
+    auto tc6 = high_resolution_clock::now();
 
-    // TODO: better exclusive scan over heads_r
     uref offsets_r;
-    self->send(lazy_scan, heads_r, keycount);
-    self->receive([&](uref& offsets) {
-      offsets_r = offsets;
+    self->send(scan1, heads_r, keycount);
+    self->receive([&](uref& data, uref& incs) {
+      d = std::move(data);
+      self->send(scan1, incs, as_uval(incs.size()));
     });
-    //cout << "Lazy scan done." << endl;
+    self->receive([&](uref& data, uref& incs) {
+      self->send(scan2, data, incs, as_uval(incs.size()));
+    });
+    self->receive([&](uref& data, uref& incs) {
+      self->send(scan3, data, incs, as_uval(data.size()));
+    });
+    self->receive([&](uref& incs) {
+      self->send(scan3, d, incs, as_uval(d.size()));
+    });
+    self->receive([&](uref& results) {
+      offsets_r = std::move(results);
+    });
+    dev->synchronize();
+    auto tc7 = high_resolution_clock::now();
 
 #ifdef SHOW_TIME_CONSUMPTION
     dev->synchronize();
     to = high_resolution_clock::now();
     cout << DESCRIPTION("Column length:\t\t")
          << duration_cast<microseconds>(to - from).count() << " us" << endl;
+    cout << " > preparations:   " << duration_cast<microseconds>(tc2 - tc1).count() << " us" << endl;
+    cout << " > segmented scan: " << duration_cast<microseconds>(tc3 - tc2).count() << " us" << endl;
+    cout << " > make inclusive: " << duration_cast<microseconds>(tc4 - tc3).count() << " us" << endl;
+    cout << " > convert heads:  " << duration_cast<microseconds>(tc5 - tc4).count() << " us" << endl;
+    cout << " > compaction:     " << duration_cast<microseconds>(tc6 - tc5).count() << " us" << endl;
+    cout << " > scan:           " << duration_cast<microseconds>(tc7 - tc6).count() << " us" << endl;
     from = high_resolution_clock::now();
 #endif
 

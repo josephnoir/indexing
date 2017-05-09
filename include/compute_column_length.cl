@@ -22,31 +22,27 @@
  */
 
 kernel void column_prepare(global const uint* restrict chids,
-                           global       uint* restrict tmp,
                            global const uint* restrict input,
+                           global       uint* restrict tmp,
                            global       uint* restrict heads,
                            uint len) {
+  const uint n_half = get_global_size(0);
+  const uint ai = get_global_id(0);
+  const uint bi = get_global_id(0) + n_half;
+  if (ai < len) {
+    tmp[ai] = 1 + (chids[ai] != 0);
+    heads[ai] = (ai == 0) || (input[ai] != input[ai - 1]);
+  }
+  if (bi < len) {
+    tmp[bi] = 1 + (chids[bi] != 0);
+    heads[bi] = (input[bi]!= input[bi - 1]);
+  }
+/*
   uint idx = get_global_id(0);
   tmp[idx] = 1 + (chids[idx] != 0);
   // create heads array for next steps
   heads[idx] = (idx == 0) || (input[idx] != input[idx - 1]);
-}
-
-// somewhat inefficient segmented scan (not really a scan as it stores the
-// accumulated value at the beginning of the segment)
-kernel void lazy_segmented_scan(global const uint* restrict heads,
-                                global       uint* restrict data) {
-  uint idx = get_global_id(0);
-  uint maximum = get_global_size(0);
-  if (heads[idx] != 0) {
-    uint val = data[idx];
-    uint curr = idx + 1;
-    while (heads[curr] == 0 && curr < maximum) {
-      val += data[curr]; // SUM operation
-      curr += 1;
-    }
-    data[idx] = val;
-  }
+*/
 }
 
 // Replacing the lazy segmented scan above with the segemented scan in the related cl

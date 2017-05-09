@@ -16,10 +16,10 @@ kernel void prepare_index(global uint* restrict chids,
                           global uint* restrict lits,
                           global uint* restrict index,
                           private uint k) {
-  uint idx = get_global_id(0);
-  if (idx < k) {
-    index[2 * idx    ] = chids[idx];
-    index[2 * idx + 1] = lits[idx];
+  uint thread = get_global_id(0);
+  if (thread < k) {
+    index[2 * thread    ] = chids[thread];
+    index[2 * thread + 1] = lits[thread];
   }
 }
 
