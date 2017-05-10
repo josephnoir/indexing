@@ -701,6 +701,26 @@ void caf_main(actor_system& system, const config& cfg) {
       local<uval>{half_block * 2},  // tree buffer
       priv<uval, val>{}
     );
+    auto seg_scan4 = mngr.spawn_new(
+      prog_sscan, "downsweep_inc", ndr,
+      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, const uref&, const uref&, const uref&,
+                      const uref&, const uref&, uval n) {
+          conf = ndr_scan(n);
+        });
+        return std::move(msg);
+      },
+      in_out<uval,mref,mref>{},     // data
+      in_out<uval,mref,mref>{},     // partition
+      in<uval,mref>{},              // tree
+      in<uval,mref>{},              // last_data
+      in<uval,mref>{},              // last_partition
+      in<uval,mref>{},              // original data
+      local<uval>{half_block * 2},  // data buffer
+      local<uval>{half_block * 2},  // part buffer
+      local<uval>{half_block * 2},  // tree buffer
+      priv<uval, val>{}
+    );
     auto make_inclusive = mngr.spawn_new(
       prog_sscan, "make_inclusive", ndr,
       [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
@@ -1042,16 +1062,19 @@ void caf_main(actor_system& system, const config& cfg) {
       self->send(seg_scan3, d2, p2, t2, ld, lp, as_uval(d2.size()));
     });
     self->receive([&](uref& ld, uref& lp) {
-      self->send(seg_scan3, d, p, t, ld, lp, as_uval(d.size()));
+      self->send(seg_scan4, d, p, t, ld, lp, std::move(*values_copy),
+                 as_uval(d.size()));
     });
-    self->receive([&](const uref& results, const uref& /* partitions */) {
+    self->receive([&](uref& results, const uref& /* partitions */) {
+    /*
       self->send(make_inclusive, results, std::move(*values_copy),
                  as_uval(results.size()));
     });
     dev->synchronize();
     auto tc3 = high_resolution_clock::now();
     self->receive([&](const uref& results) {
-      tmp_r = results;
+    */
+      tmp_r = std::move(results);
       self->send(col_conv, std::move(*heads_copy), k);
     });
     dev->synchronize();
@@ -1115,8 +1138,11 @@ void caf_main(actor_system& system, const config& cfg) {
     cout << DESCRIPTION("Column length:\t\t")
          << duration_cast<microseconds>(to - from).count() << " us" << endl;
     cout << " > preparations:   " << duration_cast<microseconds>(tc2 - tc1).count() << " us" << endl;
+    /*
     cout << " > segmented scan: " << duration_cast<microseconds>(tc3 - tc2).count() << " us" << endl;
     cout << " > make inclusive: " << duration_cast<microseconds>(tc4 - tc3).count() << " us" << endl;
+    */
+    cout << " > segmented scan: " << duration_cast<microseconds>(tc4 - tc2).count() << " us" << endl;
     cout << " > convert heads:  " << duration_cast<microseconds>(tc5 - tc4).count() << " us" << endl;
     cout << " > compaction:     " << duration_cast<microseconds>(tc6 - tc5).count() << " us" << endl;
     cout << " > scan:           " << duration_cast<microseconds>(tc7 - tc6).count() << " us" << endl;
