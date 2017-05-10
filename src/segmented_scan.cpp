@@ -255,20 +255,17 @@ void caf_main(actor_system& system, const config& cfg) {
                                  local<uval>{group_size * 2},  // part buffer
                                  local<uval>{group_size * 2},  // tree buffer
                                  priv<uval, val>{});
-    auto phase5 = mngr.spawn_new(prog, "downsweep", ndr_downsweep_01,
+    auto phase5 = mngr.spawn_new(prog, "downsweep_inc", ndr_downsweep_01,
                                  in_out<uval,mref,mref>{},     // data
                                  in_out<uval,mref,mref>{},     // partition
                                  in<uval,mref>{},              // tree
                                  in<uval,mref>{},              // last_data
                                  in<uval,mref>{},              // last_partition
+                                 in<uval,mref>{},              // original data
                                  local<uval>{group_size * 2},  // data buffer
                                  local<uval>{group_size * 2},  // part buffer
                                  local<uval>{group_size * 2},  // tree buffer
                                  priv<uval, val>{});
-    auto convert = mngr.spawn_new(prog, "make_inclusive", ndr_upsweep_01,
-                                  in_out<uval, mref, val>{},
-                                  in<uval, mref>{},
-                                  priv<uval, val>{});
     // ---- test data ----
     //auto scanned = segmented_exclusive_scan(values, heads);
     auto scanned = segmented_inclusive_scan(values, heads);
@@ -300,33 +297,9 @@ void caf_main(actor_system& system, const config& cfg) {
       self->send(phase4, d2, p2, t2, ld, lp, static_cast<uval>(n_inner));
     });
     self->receive([&](uref& ld, uref& lp) {
-      self->send(phase5, d, p, t, ld, lp, static_cast<uval>(n_outer));
+      self->send(phase5, d, p, t, ld, lp, *save, static_cast<uval>(n_outer));
     });
-    self->receive([&](const uref& results, const uref& /*partitions*/) {
-      /*
-      if (results != scanned) {
-        cout << "Expected different result" << endl;
-        cout << "   idx   ||    val   | expected | received |" << endl;
-        for (size_t i = 0; i < results.size(); ++i) {
-          if (heads[i] == 1)
-            cout << "---------||----------|----------|----------|------" << endl;
-          cout << setw(8) << i          << " || "
-               << setw(8) << values[i]  << " | "
-               << setw(8) << scanned[i] << " | "
-               << setw(8) << results[i] << " | ";
-          if (scanned[i] != results[i]) {
-            cout << "!!!!";
-          }
-            cout << endl;
-        }
-        cout << "Failure" << endl;
-      } else {
-        cout << "Success" << endl;
-      }
-      */
-      self->send(convert, results, *save, static_cast<uval>(n_outer));
-    });
-    self->receive([&](const uvec& results) {
+    self->receive([&](const uvec& results, uref&) {
       if (results != scanned) {
         /*
         cout << "Expected different result" << endl;

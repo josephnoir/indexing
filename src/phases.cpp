@@ -431,15 +431,9 @@ void caf_main(actor_system& system, const config& cfg) {
   // configuration parameters
   auto n = values.size();
   auto ndr = spawn_config{dim_vec{n}};
-  // TODO: not a nice solution, need some better approach
   auto one = [](uref&, uref&, uref&, uval) { return size_t{1}; };
   auto k_double = [](uref&, uref&, uval k) { return size_t{2 * k}; };
-  auto k_two = [](uref&, uval k) { return size_t{k}; };
   auto fills_k = [](uref&, uref&, uval k) { return size_t{k}; };
-//  auto es_incs = [&](const uref&, uval n) -> size_t {
-//    // calculate number of groups, depending on the group size from the input size
-//    return (round_up((n + 1) / 2, as_uval(es_group_size)) / es_group_size);
-//  };
   // segmented scan
   auto half_block = dev->get_max_work_group_size() / 2;
   auto get_size = [half_block](size_t n) -> size_t {
@@ -478,13 +472,13 @@ void caf_main(actor_system& system, const config& cfg) {
   // - groups separate threads of a block into multiple bundles
   // TODO: Optimized runs with regard to cardinality
   uint32_t cardinality = 16;
-  uint32_t l_val = 4; // bits used as a bucket in each radix iteration
+  uint32_t l_val = 8; // bits used as a bucket in each radix iteration
   uint32_t radices = 1 << l_val;
-  uint32_t blocks
-    = (dev->get_max_compute_units() <= (radices / 2)) ? (radices / 2) : radices;
+  uint32_t blocks = 8;
+    //= (dev->get_max_compute_units() <= (radices / 2)) ? (radices / 2) : radices;
   uint32_t threads_per_block
     = max(radices, static_cast<uint32_t>(dev->get_max_work_group_size()));
-  uint32_t threads_per_group = threads_per_block / radices;
+  uint32_t threads_per_group = threads_per_block / 8; //radices;
   uint32_t groups_per_block = threads_per_block / threads_per_group;
   uint32_t mask = (1 << l_val) - 1;
   uint32_t radices_per_block = radices / blocks;
@@ -719,16 +713,6 @@ void caf_main(actor_system& system, const config& cfg) {
       local<uval>{half_block * 2},  // data buffer
       local<uval>{half_block * 2},  // part buffer
       local<uval>{half_block * 2},  // tree buffer
-      priv<uval, val>{}
-    );
-    auto make_inclusive = mngr.spawn_new(
-      prog_sscan, "make_inclusive", ndr,
-      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
-        msg.apply([&](const uref&, const uref&, uval n) { conf = ndr_scan(n); });
-        return std::move(msg);
-      },
-      in_out<uval, mref, mref>{},
-      in<uval, mref>{},
       priv<uval, val>{}
     );
     scoped_actor self{system};
@@ -1066,14 +1050,6 @@ void caf_main(actor_system& system, const config& cfg) {
                  as_uval(d.size()));
     });
     self->receive([&](uref& results, const uref& /* partitions */) {
-    /*
-      self->send(make_inclusive, results, std::move(*values_copy),
-                 as_uval(results.size()));
-    });
-    dev->synchronize();
-    auto tc3 = high_resolution_clock::now();
-    self->receive([&](const uref& results) {
-    */
       tmp_r = std::move(results);
       self->send(col_conv, std::move(*heads_copy), k);
     });
