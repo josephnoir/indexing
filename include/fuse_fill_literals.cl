@@ -14,12 +14,14 @@
 
 kernel void prepare_index(global uint* restrict chids,
                           global uint* restrict lits,
-                          global uint* restrict index,
+                          global uint2* restrict index,
                           private uint k) {
   uint thread = get_global_id(0);
+  uint2 res;
   if (thread < k) {
-    index[2 * thread    ] = chids[thread];
-    index[2 * thread + 1] = lits[thread];
+    res.x = chids[thread];
+    res.y = lits[thread];
+    index[thread] = res;
   }
 }
 
