@@ -472,13 +472,13 @@ void caf_main(actor_system& system, const config& cfg) {
   // - groups separate threads of a block into multiple bundles
   // TODO: Optimized runs with regard to cardinality
   uint32_t cardinality = 16;
-  uint32_t l_val = 8; // bits used as a bucket in each radix iteration
+  uint32_t l_val = 4; // bits used as a bucket in each radix iteration
   uint32_t radices = 1 << l_val;
   uint32_t blocks = 8;
     //= (dev->get_max_compute_units() <= (radices / 2)) ? (radices / 2) : radices;
-  uint32_t threads_per_block
-    = max(radices, static_cast<uint32_t>(dev->get_max_work_group_size()));
-  uint32_t threads_per_group = threads_per_block / 8; //radices;
+  uint32_t threads_per_block = 1024;
+    //= max(radices, static_cast<uint32_t>(dev->get_max_work_group_size()));
+  uint32_t threads_per_group = 32; //threads_per_block / 8; //radices;
   uint32_t groups_per_block = threads_per_block / threads_per_group;
   uint32_t mask = (1 << l_val) - 1;
   uint32_t radices_per_block = radices / blocks;
@@ -502,7 +502,6 @@ void caf_main(actor_system& system, const config& cfg) {
   };
   auto ndr_radix = spawn_config{dim_vec{threads_per_block * blocks}, {},
                                 dim_vec{threads_per_block}};
-  auto ndr_zero = spawn_config{dim_vec{counters}};
   {
     auto start = high_resolution_clock::now();
     // create phases
@@ -511,11 +510,10 @@ void caf_main(actor_system& system, const config& cfg) {
                                  in_out<uval,mref,mref>{}, out<uval,mref>{},
                                  priv<uval>{as_uval(n)});
     // ---- radix sort (by key) ----
-    auto radix_zero = mngr.spawn_new(prog_radix, "zeroes", ndr_zero,
-                                     in_out<uval,mref,mref>{});
     auto radix_count = mngr.spawn_new(prog_radix, "count", ndr_radix,
                                       in_out<uval,mref,mref>{},
                                       in_out<uval,mref,mref>{},
+                                      local<uval>{radices * groups_per_block},
                                       priv<radix_config>{rc},
                                       priv<uval,val>{});
     auto radix_scan = mngr.spawn_new(prog_radix, "scan", ndr_radix,
@@ -760,10 +758,8 @@ void caf_main(actor_system& system, const config& cfg) {
           std::swap(r_keys_in, r_keys_out);
           std::swap(r_values_in, r_values_out);
         }
-        self->send(radix_zero, r_counters);
-        self->receive([&](uref& /*counters*/) {
-          self->send(radix_count, r_keys_in, r_counters, offset);
-        });
+        start = high_resolution_clock::now();
+        self->send(radix_count, r_keys_in, r_counters, offset);
         self->receive([&](uref& /*k*/, uref& /*c*/) {
           self->send(radix_scan, r_keys_in, r_counters, r_prefixes, offset);
         });

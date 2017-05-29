@@ -23,10 +23,6 @@ typedef struct radix_config {
   uint size;     // total elements
 } configuration;
 
-kernel void zeroes(global uint* counters) {
-  counters[get_global_id(0)] = 0;
-}
-
 inline void __attribute__((always_inline))
 prefix_sum(local uint* data, int len, int threads) {
   uint thread = get_local_id(0);
@@ -56,12 +52,17 @@ prefix_sum(local uint* data, int len, int threads) {
 
 // Optimization: count in local memory and copy to global when the
 // block is finished.
-kernel void count(global          uint* restrict cell_in,
-                  global volatile uint* restrict counters,
+kernel void count(global uint* restrict cell_in,
+                  global uint* restrict counters,
+                  local  uint*          histogram,
                   configuration conf, uint offset) {
   const uint thread = get_local_id(0);
   const uint block = get_group_id(0);
   const uint group = thread / conf.tpg;
+  // Set counters to zero
+  for (uint r = 0; r < conf.radices; ++r)
+    histogram[conf.radices * group + r] = 0;
+  barrier(CLK_LOCAL_MEM_FENCE);
   // Each group has its own counter for each radix.
   // Position in counter for the first group in this block.
   const uint group_offset = block * conf.gpb;
@@ -76,14 +77,20 @@ kernel void count(global          uint* restrict cell_in,
   const uint end = min(elem_offset + conf.epg, conf.size);
   for (uint i = start; i < end; i += conf.tpg) {
     const uint bits = (cell_in[i] >> offset) & conf.mask;
-    const uint index = (bits * entries) + group_offset + group;
+    const uint index = (conf.radices * group + bits);
     // The following code ensures that the counters of each thread group are
     // sequentially incremented. Only one thread per group writes in each loop.
     for (uint j = 0; j < conf.tpg; ++j) {
       if (group_thread == j)
-        ++counters[index];
-      barrier(CLK_GLOBAL_MEM_FENCE);
+        ++histogram[index];
+      barrier(CLK_LOCAL_MEM_FENCE);
     }
+  }
+  for (uint r = 0; r < conf.radices; ++r) {
+    const uint from = conf.radices * group + r;
+    const uint to = r * entries + group_offset + group;
+    // const uint index = (bits * entries) + group_offset + group
+    counters[to] = histogram[from];
   }
 }
 
