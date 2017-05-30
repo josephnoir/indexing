@@ -44,9 +44,6 @@ using uref = mem_ref<uval>;
                               JUST FOR STUFF
 \*****************************************************************************/
 
-template <class T, typename std::enable_if<is_integral<T>{}, int>::type = 0>
-uval as_uval(T val) { return static_cast<uval>(val); }
-
 template <class T>
 void valid_or_exit(T expr, const std::string& str = "") {
   if (expr)
@@ -182,7 +179,7 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // ---- general ----
   auto dev = move(*opt);
-  auto prog = mngr.create_program_from_file("./include/segmented_scan.cl",
+  auto prog = mngr.create_program_from_file("./include/segmented_reduce.cl",
                                               "", dev);
   // --- scope to ensure actor cleanup ---
   {
@@ -197,141 +194,112 @@ void caf_main(actor_system& system, const config& cfg) {
     for (size_t i = 1; i < values.size(); ++i)
       heads.emplace_back(flag_gen(gen) ? 1 : 0);
 
-    // ---- spawn arguments ----
-    auto ndr = spawn_config{dim_vec{n}};
-    auto half_block = dev->get_max_work_group_size() / 2;
-    auto get_size = [half_block](size_t n) -> size_t {
-      return round_up((n + 1) / 2, half_block);
+    // ---- functions for arguments ----
+    auto get_size = [group_size](size_t n) -> size_t {
+      return round_up((n + 1) / 2, group_size);
     };
-    auto half_size_for = [](size_t n, size_t block) -> size_t {
-      return round_up((n + 1) / 2, block);
+    auto nd_conf = [group_size, get_size](size_t dim) {
+      return spawn_config{dim_vec{get_size(dim)}, {}, dim_vec{group_size}};
     };
-    auto ndr_scan = [half_size_for, half_block](size_t dim) {
-      return spawn_config{dim_vec{half_size_for(dim,half_block)}, {},
-                                  dim_vec{half_block}};
-    };
-    auto reduced_sscan = [&](const uref&, const uref&, const uref&, uval n) {
+    auto reduced_vec = [&](const uvec&, const uvec&, const uvec&, uval n) {
       // calculate number of groups from the group size from the values size
-      return size_t{get_size(n) / half_block};
+      return size_t{get_size(n) / group_size};
     };
-    // ---- actors ----
+    auto reduced_ref = [&](const uref&, const uref&, const uref&, uval n) {
+      // calculate number of groups from the group size from the values size
+      return size_t{get_size(n) / group_size};
+    };
     // config for multi-level segmented scan
-    auto seg_scan1 = mngr.spawn_new(
-      prog, "upsweep", ndr,
-      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
-        msg.apply([&](const uref&, const uref&, const uref&, uval n) {
-          conf = ndr_scan(n);
-        });
-        return std::move(msg);
-      },
-      in_out<uval,mref,mref>{},       // data
-      in_out<uval,mref,mref>{},       // partition
-      in_out<uval,mref,mref>{},       // tree
-      out<uval,mref>{reduced_sscan},  // last_data
-      out<uval,mref>{reduced_sscan},  // last_part
-      out<uval,mref>{reduced_sscan},  // last_tree
-      local<uval>{half_block * 2},    // data buffer
-      local<uval>{half_block * 2},    // heads buffer
-      priv<uval, val>{}
-    );
-    auto seg_scan2 = mngr.spawn_new(
-      prog, "block_scan",
-      spawn_config{dim_vec{half_block}, {},
-                   dim_vec{half_block}},
-      in_out<uval,mref,mref>{},             // data
-      in_out<uval,mref,mref>{},             // partition
-      in<uval,mref>{},                      // tree
-      priv<uval, val>{}                     // length
-    );
-    auto seg_scan3 = mngr.spawn_new(
-      prog, "downsweep", ndr,
-      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
-        msg.apply([&](const uref&, const uref&, const uref&, const uref&,
-                      const uref&, uval n) {
-          conf = ndr_scan(n);
-        });
-        return std::move(msg);
-      },
-      in_out<uval,mref,mref>{},     // data
-      in_out<uval,mref,mref>{},     // partition
-      in<uval,mref>{},              // tree
-      in<uval,mref>{},              // last_data
-      in<uval,mref>{},              // last_partition
-      local<uval>{half_block * 2},  // data buffer
-      local<uval>{half_block * 2},  // part buffer
-      local<uval>{half_block * 2},  // tree buffer
-      priv<uval, val>{}
-    );
-    auto seg_scan4 = mngr.spawn_new(
-      prog, "downsweep_inc", ndr,
-      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
-        msg.apply([&](const uref&, const uref&, const uref&, const uref&,
-                      const uref&, const uref&, uval n) {
-          conf = ndr_scan(n);
-        });
-        return std::move(msg);
-      },
-      in_out<uval,mref,val>{},      // data
-      in_out<uval,mref,mref>{},     // partition
-      in<uval,mref>{},              // tree
-      in<uval,mref>{},              // last_data
-      in<uval,mref>{},              // last_partition
-      in<uval,mref>{},              // original data
-      local<uval>{half_block * 2},  // data buffer
-      local<uval>{half_block * 2},  // part buffer
-      local<uval>{half_block * 2},  // tree buffer
-      priv<uval, val>{}
-    );
+    uval n_outer = n;
+    uval n_inner = get_size(n_outer) / group_size;
+    uval n_block = get_size(n_inner) / group_size;
+    // ---- ndranges ----
+    auto ndr_upsweep_01 = nd_conf(n_outer);
+    auto ndr_upsweep_02 = nd_conf(n_inner);
+    auto ndr_block = spawn_config{dim_vec{group_size}, {}, dim_vec{group_size}};
+    auto ndr_downsweep_02 = ndr_upsweep_02;
+    auto ndr_downsweep_01 = ndr_upsweep_01;
+    // ---- actors ----
+    auto phase1 = mngr.spawn_new(prog, "upsweep", ndr_upsweep_01,
+                                 in_out<uval,mref,mref>{},      // data
+                                 in_out<uval,val,mref>{},      // partition
+                                 in_out<uval,val,mref>{},      // tree
+                                 out<uval,mref>{reduced_vec},  // last_data
+                                 out<uval,mref>{reduced_vec},  // last_part
+                                 out<uval,mref>{reduced_vec},  // last_tree
+                                 local<uval>{group_size * 2},  // data buffer
+                                 local<uval>{group_size * 2},  // heads buffer
+                                 priv<uval, val>{});
+    auto phase2 = mngr.spawn_new(prog, "upsweep", ndr_upsweep_02,
+                                 in_out<uval,mref,mref>{},     // data
+                                 in_out<uval,mref,mref>{},     // partition
+                                 in_out<uval,mref,mref>{},     // tree
+                                 out<uval,mref>{reduced_ref},  // last_data
+                                 out<uval,mref>{reduced_ref},  // last_part
+                                 out<uval,mref>{reduced_ref},  // last_tree
+                                 local<uval>{group_size * 2},  // data buffer
+                                 local<uval>{group_size * 2},  // heads buffer
+                                 priv<uval, val>{});
+    auto phase3 = mngr.spawn_new(prog, "block_scan", ndr_block,
+                                 in_out<uval,mref,mref>{},     // data
+                                 in_out<uval,mref,mref>{},     // partition
+                                 in<uval,mref>{},              // tree
+                                 priv<uval, val>{});           // length
+    auto phase4 = mngr.spawn_new(prog, "downsweep", ndr_downsweep_02,
+                                 in_out<uval,mref,mref>{},     // data
+                                 in_out<uval,mref,mref>{},     // partition
+                                 in<uval,mref>{},              // tree
+                                 in<uval,mref>{},              // last_data
+                                 in<uval,mref>{},              // last_partition
+                                 local<uval>{group_size * 2},  // data buffer
+                                 local<uval>{group_size * 2},  // part buffer
+                                 local<uval>{group_size * 2},  // tree buffer
+                                 priv<uval, val>{});
+    auto phase5 = mngr.spawn_new(prog, "downsweep", ndr_downsweep_01,
+                                 in_out<uval,mref,mref>{},     // data
+                                 in_out<uval,mref,mref>{},     // partition
+                                 in<uval,mref>{},              // tree
+                                 in<uval,mref>{},              // last_data
+                                 in<uval,mref>{},              // last_partition
+                                 local<uval>{group_size * 2},  // data buffer
+                                 local<uval>{group_size * 2},  // part buffer
+                                 local<uval>{group_size * 2},  // tree buffer
+                                 priv<uval, val>{});
     // ---- test data ----
-    //auto scanned = segmented_exclusive_scan(values, heads);
-    auto scanned = segmented_inclusive_scan(values, heads);
+    //auto reduced = segmented_exclusive_scan(values, heads);
+    auto reduced = segmented_inclusive_scan(values, heads);
 
     // ---- computations -----
+    // TODO: use request to avoid the write back to variables
     scoped_actor self{system};
-    uref values_r = dev->global_argument(values);
-    auto values_copy = dev->copy(values_r);
-    uref heads_r = dev->global_argument(heads);
-    auto heads_copy = dev->copy(heads_r);
+    uref vals = dev->global_argument(values);
+    auto save = dev->copy(vals);
     uref d, p, t, d2, p2, t2;
-    dev->synchronize();
-    cout << __FILE__ << ":" << __LINE__ << endl;
-    self->send(seg_scan1, values_r, heads_r, *heads_copy,
-               as_uval(values_r.size()));
+    self->send(phase1, vals, heads, heads, static_cast<uval>(n_outer));
     self->receive([&](uref&      data, uref&      part, uref&      tree,
                       uref& last_data, uref& last_part, uref& last_tree) {
-      dev->synchronize();
-      cout << __FILE__ << ":" << __LINE__ << endl;
       d = data;
       p = part;
       t = tree;
-      self->send(seg_scan1, last_data, last_part, last_tree,
-                 as_uval(last_data.size()));
+      self->send(phase2, last_data, last_part, last_tree,
+                 static_cast<uval>(n_inner));
     });
     self->receive([&](uref&      data, uref&      part, uref&      tree,
                       uref& last_data, uref& last_part, uref& last_tree) {
-      dev->synchronize();
-      cout << __FILE__ << ":" << __LINE__ << endl;
       d2 = data;
       p2 = part;
       t2 = tree;
-      self->send(seg_scan2, last_data, last_part, last_tree,
-                 as_uval(last_data.size()));
+      self->send(phase3, last_data, last_part, last_tree,
+                 static_cast<uval>(n_block));
     });
     self->receive([&](uref& ld, uref& lp) {
-      dev->synchronize();
-      cout << __FILE__ << ":" << __LINE__ << endl;
-      self->send(seg_scan3, d2, p2, t2, ld, lp, as_uval(d2.size()));
+      self->send(phase4, d2, p2, t2, ld, lp, static_cast<uval>(n_inner));
     });
     self->receive([&](uref& ld, uref& lp) {
-      dev->synchronize();
-      cout << __FILE__ << ":" << __LINE__ << endl;
-      self->send(seg_scan4, d, p, t, ld, lp, *values_copy, as_uval(d.size()));
+      self->send(phase5, d, p, t, ld, lp, static_cast<uval>(n_outer));
     });
-    self->receive([&](const uvec& results, uref&) {
-      dev->synchronize();
-      cout << __FILE__ << ":" << __LINE__ << endl;
-      if (results != scanned) {
-        /*
+    self->receive([&](const uref& results, const uref& /*partitions*/) {
+      if (results != reduced) {
         cout << "Expected different result" << endl;
         cout << "   idx   ||    val   | expected | received |" << endl;
         for (size_t i = 0; i < results.size(); ++i) {
@@ -339,14 +307,13 @@ void caf_main(actor_system& system, const config& cfg) {
             cout << "---------||----------|----------|----------|------" << endl;
           cout << setw(8) << i          << " || "
                << setw(8) << values[i]  << " | "
-               << setw(8) << scanned[i] << " | "
+               << setw(8) << reduced[i] << " | "
                << setw(8) << results[i] << " | ";
-          if (scanned[i] != results[i]) {
+          if (reduced[i] != results[i]) {
             cout << "!!!!";
           }
             cout << endl;
         }
-        */
         cout << "Failure" << endl;
       } else {
         cout << "Success" << endl;
@@ -354,9 +321,9 @@ void caf_main(actor_system& system, const config& cfg) {
     });
     /*
     // This just tested a block-level segmented scan, i.e., phase 2
-    self->send(block, values, heads, heads, as_uval(n));
+    self->send(block, values, heads, heads, static_cast<uval>(n));
     self->receive([&](uvec& results, uvec&, uvec&) {
-      if (results != scanned) {
+      if (results != reduced) {
         cout << "Expected different result" << endl;
         cout << "idx || val | expected | received |" << endl;
         for (size_t i = 0; i < results.size(); ++i) {
@@ -364,9 +331,9 @@ void caf_main(actor_system& system, const config& cfg) {
             cout << "----||-----|----------|----------|------" << endl;
           cout << setw(3) << i          << " || "
                << setw(3) << values[i]  << " | "
-               << setw(8) << scanned[i] << " | "
+               << setw(8) << reduced[i] << " | "
                << setw(8) << results[i] << " | ";
-          if (scanned[i] != results[i]) {
+          if (reduced[i] != results[i]) {
             cout << "!!!!";
           }
             cout << endl;

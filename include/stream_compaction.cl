@@ -86,10 +86,9 @@ kernel void countElts(global uint* restrict dgBlockCounts,
   return;
 }
 
-// Phase 2/3: Move valid elements using SIMD compaction. Phase 2 is done
-// implicitly at top of global__ method. Exclusive prefix scan over 128
-// elements, assumes 128 threads. Taken from cuda SDK "scan" sample for
-// naive scan, with small modifications.
+// Phase 3: Move valid elements using SIMD compaction. Exclusive prefix 
+// scan over 128 elements, assumes 128 threads. Taken from cuda SDK "scan"
+// sample for naive scan, with small modifications.
 uint exclusivePrescan128(local const uint* in, local uint* outAndTemp) {
   const uint idx = get_local_id(0);
   int pout = 1;

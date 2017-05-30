@@ -19,7 +19,7 @@
 
 #include "caf/opencl/all.hpp"
 
-//#define WITH_CPU_TESTS
+#define WITH_CPU_TESTS
 #define SHOW_TIME_CONSUMPTION
 #define WITH_DESCRIPTION
 #ifdef WITH_CPU_TESTS
@@ -506,45 +506,59 @@ void caf_main(actor_system& system, const config& cfg) {
     auto start = high_resolution_clock::now();
     // create phases
     // sort rids ...
-    auto rids_1 = mngr.spawn_new(prog_rids, "create_rids", ndr,
-                                 in_out<uval,mref,mref>{}, out<uval,mref>{},
-                                 priv<uval>{as_uval(n)});
+    auto rids_1 = mngr.spawn_new(
+      prog_rids, "create_rids", ndr,
+      in_out<uval,mref,mref>{}, out<uval,mref>{},
+      priv<uval>{as_uval(n)}
+    );
     // ---- radix sort (by key) ----
-    auto radix_count = mngr.spawn_new(prog_radix, "count", ndr_radix,
-                                      in_out<uval,mref,mref>{},
-                                      in_out<uval,mref,mref>{},
-                                      local<uval>{radices * groups_per_block},
-                                      priv<radix_config>{rc},
-                                      priv<uval,val>{});
-    auto radix_scan = mngr.spawn_new(prog_radix, "scan", ndr_radix,
-                                     in_out<uval,mref,mref>{},
-                                     in_out<uval,mref,mref>{},
-                                     in_out<uval,mref,mref>{},
-                                     local<uval>{groups_per_block * blocks},
-                                     priv<radix_config>{rc},
-                                     priv<uval,val>{});
-    auto radix_move = mngr.spawn_new(prog_radix, "reorder_kv", ndr_radix,
-                                     in_out<uval,mref,mref>{},
-                                     in_out<uval,mref,mref>{},
-                                     in_out<uval,mref,mref>{},
-                                     in_out<uval,mref,mref>{},
-                                     in_out<uval,mref,mref>{},
-                                     in_out<uval,mref,mref>{},
-                                     local<uval>{groups_per_block * radices},
-                                     local<uval>{radices},
-                                     priv<radix_config>{rc},
-                                     priv<uval,val>{});
+    auto radix_count = mngr.spawn_new(
+      prog_radix, "count", ndr_radix,
+      in_out<uval,mref,mref>{},
+      in_out<uval,mref,mref>{},
+      local<uval>{radices * groups_per_block},
+      priv<radix_config>{rc},
+      priv<uval,val>{}
+    );
+    auto radix_scan = mngr.spawn_new(
+      prog_radix, "scan", ndr_radix,
+      in_out<uval,mref,mref>{},
+      in_out<uval,mref,mref>{},
+      in_out<uval,mref,mref>{},
+      local<uval>{groups_per_block * blocks},
+      priv<radix_config>{rc},
+      priv<uval,val>{}
+    );
+    auto radix_move = mngr.spawn_new(
+      prog_radix, "reorder_kv", ndr_radix,
+      in_out<uval,mref,mref>{},
+      in_out<uval,mref,mref>{},
+      in_out<uval,mref,mref>{},
+      in_out<uval,mref,mref>{},
+      in_out<uval,mref,mref>{},
+      in_out<uval,mref,mref>{},
+      local<uval>{groups_per_block * radices},
+      local<uval>{radices},
+      priv<radix_config>{rc},
+      priv<uval,val>{}
+    );
     // ---- produce chuncks ----
-    auto chunks = mngr.spawn_new(prog_chunks, "produce_chunks", ndr,
-                                 in_out<uval,mref,mref>{},
-                                 out<uval,mref>{}, out<uval,mref>{});
-    auto merge_heads = mngr.spawn_new(prog_merge, "create_heads", ndr,
-                                      in_out<uval,mref,mref>{},
-                                      in_out<uval,mref,mref>{},
-                                      out<uval,mref>{});
-    auto merge_scan = mngr.spawn_new(prog_merge, "lazy_segmented_scan", ndr,
-                                     in<uval,mref>{},
-                                     in_out<uval,mref,mref>{});
+    auto chunks = mngr.spawn_new(
+      prog_chunks, "produce_chunks", ndr,
+      in_out<uval,mref,mref>{},
+      out<uval,mref>{}, out<uval,mref>{}
+    );
+    auto merge_heads = mngr.spawn_new(
+      prog_merge, "create_heads", ndr,
+      in_out<uval,mref,mref>{},
+      in_out<uval,mref,mref>{},
+      out<uval,mref>{}
+    );
+    auto merge_scan = mngr.spawn_new(
+      prog_merge, "lazy_segmented_scan", ndr,
+      in<uval,mref>{},
+      in_out<uval,mref,mref>{}
+    );
     // stream compaction
     auto sc_count = mngr.spawn_new(
       prog_sc,"countElts", ndr,
@@ -655,24 +669,24 @@ void caf_main(actor_system& system, const config& cfg) {
         });
         return std::move(msg);
       },
-      in_out<uval,mref,mref>{},     // data
-      in_out<uval,mref,mref>{},     // partition
-      in_out<uval,mref,mref>{},     // tree
+      in_out<uval,mref,mref>{},       // data
+      in_out<uval,mref,mref>{},       // partition
+      in_out<uval,mref,mref>{},       // tree
       out<uval,mref>{reduced_sscan},  // last_data
       out<uval,mref>{reduced_sscan},  // last_part
       out<uval,mref>{reduced_sscan},  // last_tree
-      local<uval>{half_block * 2},  // data buffer
-      local<uval>{half_block * 2},  // heads buffer
+      local<uval>{half_block * 2},    // data buffer
+      local<uval>{half_block * 2},    // heads buffer
       priv<uval, val>{}
     );
     auto seg_scan2 = mngr.spawn_new(
       prog_sscan, "block_scan",
       spawn_config{dim_vec{half_block}, {},
                    dim_vec{half_block}},
-      in_out<uval,mref,mref>{},     // data
-      in_out<uval,mref,mref>{},     // partition
-      in<uval,mref>{},              // tree
-      priv<uval, val>{}             // length
+      in_out<uval,mref,mref>{},             // data
+      in_out<uval,mref,mref>{},             // partition
+      in<uval,mref>{},                      // tree
+      priv<uval, val>{}                     // length
     );
     auto seg_scan3 = mngr.spawn_new(
       prog_sscan, "downsweep", ndr,
@@ -752,6 +766,11 @@ void caf_main(actor_system& system, const config& cfg) {
       auto r_counters = dev->scratch_argument<uval>(counters);
       auto r_prefixes = dev->scratch_argument<uval>(prefixes);
       uint32_t iterations = cardinality / l_val;
+      vector<size_t> count_t(iterations);
+      vector<size_t> scan_t(iterations);
+      vector<size_t> move_t(iterations);
+      auto start = high_resolution_clock::now();
+      auto stop = high_resolution_clock::now();
       for (uint32_t i = 0; i < iterations; ++i) {
         uval offset = l_val * i;
         if (i > 0) {
@@ -761,17 +780,50 @@ void caf_main(actor_system& system, const config& cfg) {
         start = high_resolution_clock::now();
         self->send(radix_count, r_keys_in, r_counters, offset);
         self->receive([&](uref& /*k*/, uref& /*c*/) {
+          dev->synchronize();
+          stop = high_resolution_clock::now();
+          count_t[i] = duration_cast<microseconds>(stop - start).count();
+          start = high_resolution_clock::now();
           self->send(radix_scan, r_keys_in, r_counters, r_prefixes, offset);
         });
         self->receive([&](uref& /*k*/, uref& /*c*/, uref& /*p*/) {
+          dev->synchronize();
+          stop = high_resolution_clock::now();
+          scan_t[i] = duration_cast<microseconds>(stop - start).count();
+          start = high_resolution_clock::now();
           self->send(radix_move, r_keys_in, r_keys_out, r_values_in, r_values_out,
                                  r_counters, r_prefixes, offset);
         });
         self->receive([&](uref& /*ki*/, uref& /*ko*/, uref& /*vi*/, uref& /*vo*/,
                           uref& /*c*/, uref& /*p*/) { });
+        dev->synchronize();
+        stop = high_resolution_clock::now();
+        move_t[i] = duration_cast<microseconds>(stop - start).count();
       }
       input_r = r_keys_out;
       rids_r = r_values_out;
+      size_t total_t = 0;
+      total_t = 0;
+      cout << "count: ";
+      for (auto t : count_t){
+        cout << setw(10) << t << "us";
+        total_t += t;
+      }
+      cout << " = " << total_t  << "us" << endl;
+      total_t = 0;
+      cout << "scan:  ";
+      for (auto t : scan_t){
+        cout << setw(10) << t << "us";
+        total_t += t;
+      }
+      cout << " = " << total_t  << "us" << endl;
+      total_t = 0;
+      cout << "move:  ";
+      for (auto t : move_t){
+        cout << setw(10) << t << "us";
+        total_t += t;
+      }
+      cout << " = " << total_t  << "us" << endl;
     }
 
 #ifdef WITH_CPU_TESTS
@@ -1062,6 +1114,7 @@ void caf_main(actor_system& system, const config& cfg) {
     // stream compaction
     self->send(sc_count, heads_r, k);
     self->receive([&](uref& blocks, uref& heads) {
+      dev->synchronize();
       self->send(scan1, blocks, k);
       heads_r = heads;
     });
@@ -1084,6 +1137,7 @@ void caf_main(actor_system& system, const config& cfg) {
     auto tc6 = high_resolution_clock::now();
 
     uref offsets_r;
+
     self->send(scan1, heads_r, keycount);
     self->receive([&](uref& data, uref& incs) {
       d = std::move(data);

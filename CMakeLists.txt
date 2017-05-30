@@ -106,6 +106,9 @@ set(SOURCES_SCAN
 set(SOURCES_SEGMENTED_SCAN
   src/segmented_scan.cpp
 )
+set(SOURCES_STREAM_COMPACTION
+  src/sc.cpp
+)
 file(GLOB_RECURSE HEADERS "include/*.hpp" "include/*.cl")
 
 add_executable(cpu
@@ -216,6 +219,20 @@ add_executable(segmented_scan
   ${CAF_INCLUDE_DIR_OPENCL}
 )
 target_link_libraries(segmented_scan
+  ${CMAKE_DL_LIBS}
+  ${CAF_LIBRARY_CORE}
+  ${CAF_LIBRARY_IO}
+  ${CAF_LIBRARY_OPENCL}
+  ${OpenCL_LIBRARIES}
+)
+
+add_executable(sc
+  ${SOURCES_STREAM_COMPACTION}
+  ${HEADERS}
+  ${OpenCL_INCLUDE_DIRS}
+  ${CAF_INCLUDE_DIR_OPENCL}
+)
+target_link_libraries(sc
   ${CMAKE_DL_LIBS}
   ${CAF_LIBRARY_CORE}
   ${CAF_LIBRARY_IO}
