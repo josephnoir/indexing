@@ -59,8 +59,8 @@ template <class T>
 vector<T> compact(vector<T> values, vector<T> heads) {
   assert(values.size() == heads.size());
   vector<T> result;
-  auto size = count(begin(heads), end(heads), 1u);
-  result.reserve(size);
+  auto res_size = count(begin(heads), end(heads), 1u);
+  result.reserve(res_size);
   for (size_t i = 0; i < values.size(); ++i) {
     if (heads[i] == 1)
       result.emplace_back(values[i]);
@@ -81,7 +81,7 @@ public:
   uval bound = 0;
   string device_name = "GeForce GTX 780M";
   bool print_results;
-  double frequency = 0.1;
+  double frequency = 0.01;
   config() {
     load<opencl::manager>();
     opt_group{custom_options_, "global"}
@@ -112,9 +112,8 @@ void caf_main(actor_system& system, const config& cfg) {
   bernoulli_distribution h_gen(cfg.frequency);
   // ---- get data ----
   if (cfg.filename.empty()) {
-    //auto size = s_gen(gen) * 1048576 + s_gen(gen);
-    auto size = s_gen(gen) * 10485 + s_gen(gen);
-    cout << "Using " << size << " values." << endl;
+    auto size = s_gen(gen) * 1048576 + s_gen(gen);
+    cout << "Compacting " << size << " values." << endl;
     values.reserve(size);
     for (size_t i = 0; i < size; ++i)
       values.emplace_back(v_gen(gen));
@@ -230,7 +229,7 @@ void caf_main(actor_system& system, const config& cfg) {
         });
         return std::move(msg);
       },
-      out<uval,val>{one},
+      out<uval,mref>{one},
       in_out<uval,mref,mref>{},
       out<uval,mref>{k_compact},
       in_out<uval,mref,mref>{},
@@ -241,75 +240,34 @@ void caf_main(actor_system& system, const config& cfg) {
       priv<uval,val>{}
     );
 
-    uval n = as_uval(values.size());
-    auto input = dev->global_argument(values);
+    auto values_r = dev->global_argument(values);
     auto heads_r = dev->global_argument(heads);
+    auto expected = compact(values, heads);
     uref data_r;
 
     // computations
     scoped_actor self{system};
-    cout << "start" << endl;
-    self->send(sc_count, move(heads_r), n);
+    self->send(sc_count, heads_r, as_uval(heads_r.size()));
     self->receive([&](uref& blocks, uref& heads) {
-      dev->synchronize();
-      cout << "after count" << endl;
-      self->send(scan1, move(blocks), n);
-      heads_r = std::move(heads);
-    });
-    /*
-    self->receive([&](uref& data, uref& incs) {
-      dev->synchronize();
-      cout << "after scan 1" << endl;
-      uval size = incs.size();
-      self->send(scan1, move(incs), size);
-      data_r = move(data);
-    });
-    */
-    self->receive([&](uref& data, uref& incs) {
-      dev->synchronize();
-      cout << "after scan 1" << endl;
-      uval size = incs.size();
-      cout << "Sending data of size " << size << endl;
-      self->send(scan2, move(data), move(incs), size);
+      self->send(scan1, blocks, as_uval(blocks.size()));
+      heads_r = heads;
     });
     self->receive([&](uref& data, uref& incs) {
-      dev->synchronize();
-      cout << "after scan 2" << endl;
-      uval size = data.size();
-      self->send(scan3, move(data), move(incs), size);
+      self->send(scan2, data, incs, as_uval(incs.size()));
     });
-    /*
-    self->receive([&](uref& incs) {
-      dev->synchronize();
-      cout << "after scan 3" << endl;
-      uval size = data_r.size();
-      self->send(scan3, move(data_r), move(incs), size);
+    self->receive([&](uref& data, uref& incs) {
+      self->send(scan3, data, incs, as_uval(data.size()));
     });
-    */
     self->receive([&](uref& results) {
-      dev->synchronize();
-      cout << "after scan 3" << endl;
-      self->send(sc_move, move(input), std::move(heads_r), move(results), n);
+      self->send(sc_move, values_r, heads_r, results, as_uval(values_r.size()));
     });
-    self->receive([&](uvec& size, uref&, uref& data, uref&, uref&) {
-      dev->synchronize();
-      cout << "after move" << endl;
-      cout << "Created compacted array of " << size.front() << " values." << endl;
-      auto exp = data.data(size.front());
+    self->receive([&](uref& size, uref&, uref& data, uref&, uref&) {
+      auto size_exp = size.data();
+      auto num = (*size_exp)[0];
+      auto exp = data.data(num);
       auto actual = std::move(*exp);
-      auto expected = compact(move(values), move(heads));
-      cout << "Expected " << expected.size() << " values." << endl;
-      if (expected != actual) {
-        cout << "FAILURE" << endl;
-        for (size_t i = 0; i < expected.size(); ++i) {
-          if (expected[i] != actual[i])
-            cout << "[" << i << "] " << expected[i] << " != " << actual[i] << endl;
-        }
-      } else {
-        cout << "SUCCESS" << endl;
-      }
+      cout << (expected != actual ? "FAILURE" : "SUCCESS") << endl;
     });
-    cout << "done" << endl;
   }
   // clean up
   system.await_all_actors_done();

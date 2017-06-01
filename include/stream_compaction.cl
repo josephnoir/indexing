@@ -111,7 +111,7 @@ uint exclusivePrescan128(local const uint* in, local uint* outAndTemp) {
 }
 
 uint compactSIMDPrefixSum(local const uint* dsData, local const uint* dsValid,
-                         local uint* dsCompact,    local uint* dsLocalIndex) {
+                          local uint* dsCompact,    local uint* dsLocalIndex) {
   uint idx = get_local_id(0);
   uint numValid = exclusivePrescan128(dsValid,dsLocalIndex);
   if (dsValid[idx])
@@ -153,6 +153,7 @@ kernel void moveValidElementsStaged(global       uint* restrict result,
       dgCompact[blockOutOffset + idx] = compactBlock[idx];
     blockOutOffset += numValidBlock;
   }
+  barrier(CLK_LOCAL_MEM_FENCE);
   if (gidx == (ngrps - 1) && idx == 0)
     result[0] = blockOutOffset;
 }
