@@ -1195,17 +1195,16 @@ void caf_main(actor_system& system, const config& cfg) {
     uvec test_chids_fuse{test_chids_produce};
     auto test_index_length = fuse_fill_literals(test_chids_fuse, test_lits,
                                                 test_index, test_k);
-//    cout << "Got index length " << index_length << ", test calculated "
-//         << test_index_length << "." << endl;
-    valid_or_exit(test_index_length == index_length, "Index lengths don't match");
+    valid_or_exit(test_index_length == index_length,
+                  "Index lengths don't match");
     valid_or_exit(index == test_index, "Indexes differ.");
     // create test offsets
     uvec test_offsets(test_k);
     uvec test_input_col{test_input};
     auto test_keycount = compute_column_length(test_input_col, test_chids_fuse,
-                                              test_offsets, test_k);
-//    cout << "Got " << keycount << " keys and expected " << test_keycount << "." << endl;
-    valid_or_exit(test_keycount == keycount, "Offsets have different keycount.");
+                                               test_offsets, test_k);
+    valid_or_exit(test_keycount == keycount,
+                  "Offsets have different keycount.");
     valid_or_exit(offsets == test_offsets, "Offsets differ.");
     cout << "Run included tests of calculated data." << endl
          << "Test index has " << test_index_length << " elements with "
