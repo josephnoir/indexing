@@ -178,7 +178,7 @@ void caf_main(actor_system& system, const config& cfg) {
     auto ndr = spawn_config{dim_vec{half_block}, {}, dim_vec{half_block}};
     // actors
     // exclusive scan
-    auto scan1 = mngr.spawn_new(
+    auto scan1 = mngr.spawn(
       prog_es, "es_phase_1", ndr,
       [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, uval n) { conf = ndr_scan(n); });
@@ -189,14 +189,14 @@ void caf_main(actor_system& system, const config& cfg) {
       local<uval>{half_block * 2},
       priv<uval, val>{}
     );
-    auto scan2 = mngr.spawn_new(
+    auto scan2 = mngr.spawn(
       prog_es, "es_phase_2",
       spawn_config{dim_vec{half_block}, {}, dim_vec{half_block}},
       in_out<uval,mref,mref>{},
       in_out<uval,mref,mref>{},
       priv<uval, val>{}
     );
-    auto scan3 = mngr.spawn_new(
+    auto scan3 = mngr.spawn(
       prog_es, "es_phase_3", ndr,
       [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, uval n) {
@@ -209,7 +209,7 @@ void caf_main(actor_system& system, const config& cfg) {
       priv<uval, val>{}
     );
     // stream compaction
-    auto sc_count = mngr.spawn_new(
+    auto sc_count = mngr.spawn(
       prog_sc,"countElts", ndr,
       [ndr_compact](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, uval n) { conf = ndr_compact(n); });
@@ -221,7 +221,7 @@ void caf_main(actor_system& system, const config& cfg) {
       priv<uval,val>{}
     );
     // --> sum operation is handled by es actors belows (exclusive scan)
-    auto sc_move = mngr.spawn_new(
+    auto sc_move = mngr.spawn(
       prog_sc, "moveValidElementsStaged", ndr,
       [ndr_compact](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, uval n) {

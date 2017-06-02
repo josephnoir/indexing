@@ -220,7 +220,7 @@ void caf_main(actor_system& system, const config& cfg) {
     auto ndr_downsweep_02 = ndr_upsweep_02;
     auto ndr_downsweep_01 = ndr_upsweep_01;
     // ---- actors ----
-    auto phase1 = mngr.spawn_new(prog, "upsweep", ndr_upsweep_01,
+    auto phase1 = mngr.spawn(prog, "upsweep", ndr_upsweep_01,
                                  in_out<uval,mref,mref>{},      // data
                                  in_out<uval,val,mref>{},      // partition
                                  in_out<uval,val,mref>{},      // tree
@@ -230,7 +230,7 @@ void caf_main(actor_system& system, const config& cfg) {
                                  local<uval>{group_size * 2},  // data buffer
                                  local<uval>{group_size * 2},  // heads buffer
                                  priv<uval, val>{});
-    auto phase2 = mngr.spawn_new(prog, "upsweep", ndr_upsweep_02,
+    auto phase2 = mngr.spawn(prog, "upsweep", ndr_upsweep_02,
                                  in_out<uval,mref,mref>{},     // data
                                  in_out<uval,mref,mref>{},     // partition
                                  in_out<uval,mref,mref>{},     // tree
@@ -240,12 +240,12 @@ void caf_main(actor_system& system, const config& cfg) {
                                  local<uval>{group_size * 2},  // data buffer
                                  local<uval>{group_size * 2},  // heads buffer
                                  priv<uval, val>{});
-    auto phase3 = mngr.spawn_new(prog, "block_scan", ndr_block,
+    auto phase3 = mngr.spawn(prog, "block_scan", ndr_block,
                                  in_out<uval,mref,mref>{},     // data
                                  in_out<uval,mref,mref>{},     // partition
                                  in<uval,mref>{},              // tree
                                  priv<uval, val>{});           // length
-    auto phase4 = mngr.spawn_new(prog, "downsweep", ndr_downsweep_02,
+    auto phase4 = mngr.spawn(prog, "downsweep", ndr_downsweep_02,
                                  in_out<uval,mref,mref>{},     // data
                                  in_out<uval,mref,mref>{},     // partition
                                  in<uval,mref>{},              // tree
@@ -255,7 +255,7 @@ void caf_main(actor_system& system, const config& cfg) {
                                  local<uval>{group_size * 2},  // part buffer
                                  local<uval>{group_size * 2},  // tree buffer
                                  priv<uval, val>{});
-    auto phase5 = mngr.spawn_new(prog, "downsweep", ndr_downsweep_01,
+    auto phase5 = mngr.spawn(prog, "downsweep", ndr_downsweep_01,
                                  in_out<uval,mref,mref>{},     // data
                                  in_out<uval,mref,mref>{},     // partition
                                  in<uval,mref>{},              // tree

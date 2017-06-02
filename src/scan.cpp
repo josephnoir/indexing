@@ -190,7 +190,7 @@ void caf_main(actor_system& system, const config& cfg) {
     // spawn arguments
     auto ndr = spawn_config{dim_vec{half_block}, {}, dim_vec{half_block}};
     // actors
-    auto phase1 = mngr.spawn_new(
+    auto phase1 = mngr.spawn(
       prog, "es_phase_1", ndr,
       [nd_conf](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, uval n) { conf = nd_conf(n); });
@@ -201,13 +201,13 @@ void caf_main(actor_system& system, const config& cfg) {
       local<uval>{half_block * 2},
       priv<uval, val>{}
     );
-    auto phase2 = mngr.spawn_new(
+    auto phase2 = mngr.spawn(
       prog, "es_phase_2", ndr,
       in_out<uval,mref,mref>{},
       in_out<uval,mref,mref>{},
       priv<uval, val>{}
     );
-    auto phase3 = mngr.spawn_new(
+    auto phase3 = mngr.spawn(
       prog, "es_phase_3", ndr,
       [nd_conf](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, uval n) { conf = nd_conf(n); });

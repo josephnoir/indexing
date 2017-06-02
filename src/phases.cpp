@@ -19,7 +19,7 @@
 
 #include "caf/opencl/all.hpp"
 
-#define WITH_CPU_TESTS
+//#define WITH_CPU_TESTS
 #define SHOW_TIME_CONSUMPTION
 #define WITH_DESCRIPTION
 #ifdef WITH_CPU_TESTS
@@ -506,13 +506,13 @@ void caf_main(actor_system& system, const config& cfg) {
     auto start = high_resolution_clock::now();
     // create phases
     // sort rids ...
-    auto rids_1 = mngr.spawn_new(
+    auto rids_1 = mngr.spawn(
       prog_rids, "create_rids", ndr,
       in_out<uval,mref,mref>{}, out<uval,mref>{},
       priv<uval>{as_uval(n)}
     );
     // ---- radix sort (by key) ----
-    auto radix_count = mngr.spawn_new(
+    auto radix_count = mngr.spawn(
       prog_radix, "count", ndr_radix,
       in_out<uval,mref,mref>{},
       in_out<uval,mref,mref>{},
@@ -520,7 +520,7 @@ void caf_main(actor_system& system, const config& cfg) {
       priv<radix_config>{rc},
       priv<uval,val>{}
     );
-    auto radix_scan = mngr.spawn_new(
+    auto radix_scan = mngr.spawn(
       prog_radix, "scan", ndr_radix,
       in_out<uval,mref,mref>{},
       in_out<uval,mref,mref>{},
@@ -529,7 +529,7 @@ void caf_main(actor_system& system, const config& cfg) {
       priv<radix_config>{rc},
       priv<uval,val>{}
     );
-    auto radix_move = mngr.spawn_new(
+    auto radix_move = mngr.spawn(
       prog_radix, "reorder_kv", ndr_radix,
       in_out<uval,mref,mref>{},
       in_out<uval,mref,mref>{},
@@ -543,24 +543,24 @@ void caf_main(actor_system& system, const config& cfg) {
       priv<uval,val>{}
     );
     // ---- produce chuncks ----
-    auto chunks = mngr.spawn_new(
+    auto chunks = mngr.spawn(
       prog_chunks, "produce_chunks", ndr,
       in_out<uval,mref,mref>{},
       out<uval,mref>{}, out<uval,mref>{}
     );
-    auto merge_heads = mngr.spawn_new(
+    auto merge_heads = mngr.spawn(
       prog_merge, "create_heads", ndr,
       in_out<uval,mref,mref>{},
       in_out<uval,mref,mref>{},
       out<uval,mref>{}
     );
-    auto merge_scan = mngr.spawn_new(
+    auto merge_scan = mngr.spawn(
       prog_merge, "lazy_segmented_scan", ndr,
       in<uval,mref>{},
       in_out<uval,mref,mref>{}
     );
     // stream compaction
-    auto sc_count = mngr.spawn_new(
+    auto sc_count = mngr.spawn(
       prog_sc,"countElts", ndr,
       [ndr_compact](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, uval n) { conf = ndr_compact(n); });
@@ -572,7 +572,7 @@ void caf_main(actor_system& system, const config& cfg) {
       priv<uval,val>{}
     );
     // --> sum operation is handled by es actors belows (exclusive scan)
-    auto sc_move = mngr.spawn_new(
+    auto sc_move = mngr.spawn(
       prog_sc, "moveValidElementsStaged", ndr,
       [ndr_compact](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, uval n) {
@@ -591,21 +591,21 @@ void caf_main(actor_system& system, const config& cfg) {
       priv<uval,val>{}
     );
     // ---- produce fills -----
-    auto fills = mngr.spawn_new(
+    auto fills = mngr.spawn(
       prog_fills, "produce_fills", ndr,
       in<uval,mref>{},in<uval,mref>{},
       out<uval,mref>{fills_k},
       priv<uval,val>{}
     );
     // ---- fuse fill & literals ----
-    auto fuse_prep = mngr.spawn_new(
+    auto fuse_prep = mngr.spawn(
       prog_fuse, "prepare_index", ndr,
       in<uval,mref>{},in<uval,mref>{},
       out<uval,mref>{k_double},
       priv<uval,val>{}
     );
     // compute column length
-    auto col_prep = mngr.spawn_new(
+    auto col_prep = mngr.spawn(
       prog_column, "column_prepare", ndr,
       [ndr_block](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, uval n) {
@@ -619,7 +619,7 @@ void caf_main(actor_system& system, const config& cfg) {
       out<uval,mref>{},
       priv<uval,val>{}
     );
-    auto col_conv = mngr.spawn_new(
+    auto col_conv = mngr.spawn(
       prog_column, "convert_heads", ndr,
       [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, uval n) { conf = ndr_scan(n); });
@@ -630,7 +630,7 @@ void caf_main(actor_system& system, const config& cfg) {
       priv<uval,val>{}
     );
     // exclusive scan
-    auto scan1 = mngr.spawn_new(
+    auto scan1 = mngr.spawn(
       prog_es, "es_phase_1", ndr,
       [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, uval n) { conf = ndr_scan(n); });
@@ -641,14 +641,14 @@ void caf_main(actor_system& system, const config& cfg) {
       local<uval>{half_block * 2},
       priv<uval, val>{}
     );
-    auto scan2 = mngr.spawn_new(
+    auto scan2 = mngr.spawn(
       prog_es, "es_phase_2",
       spawn_config{dim_vec{half_block}, {}, dim_vec{half_block}},
       in_out<uval,mref,mref>{},
       in_out<uval,mref,mref>{},
       priv<uval, val>{}
     );
-    auto scan3 = mngr.spawn_new(
+    auto scan3 = mngr.spawn(
       prog_es, "es_phase_3", ndr,
       [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, uval n) {
@@ -661,7 +661,7 @@ void caf_main(actor_system& system, const config& cfg) {
       priv<uval, val>{}
     );
     // config for multi-level segmented scan
-    auto seg_scan1 = mngr.spawn_new(
+    auto seg_scan1 = mngr.spawn(
       prog_sscan, "upsweep", ndr,
       [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, uval n) {
@@ -679,7 +679,7 @@ void caf_main(actor_system& system, const config& cfg) {
       local<uval>{half_block * 2},    // heads buffer
       priv<uval, val>{}
     );
-    auto seg_scan2 = mngr.spawn_new(
+    auto seg_scan2 = mngr.spawn(
       prog_sscan, "block_scan",
       spawn_config{dim_vec{half_block}, {},
                    dim_vec{half_block}},
@@ -688,7 +688,7 @@ void caf_main(actor_system& system, const config& cfg) {
       in<uval,mref>{},                      // tree
       priv<uval, val>{}                     // length
     );
-    auto seg_scan3 = mngr.spawn_new(
+    auto seg_scan3 = mngr.spawn(
       prog_sscan, "downsweep", ndr,
       [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, const uref&,
@@ -707,7 +707,7 @@ void caf_main(actor_system& system, const config& cfg) {
       local<uval>{half_block * 2},  // tree buffer
       priv<uval, val>{}
     );
-    auto seg_scan4 = mngr.spawn_new(
+    auto seg_scan4 = mngr.spawn(
       prog_sscan, "downsweep_inc", ndr,
       [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, const uref&,

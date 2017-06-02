@@ -188,10 +188,6 @@ void caf_main(actor_system& system, const config& cfg) {
   {
     // ---- input parameters ----
     size_t n = values.size();
-    size_t group_size = 512;
-    // size_t global_range = round_up((n + 1) / 2, group_size);
-    // size_t local_range = group_size;
-    // size_t groups = (global_range / local_range);
     heads.reserve(values.size());
     heads.emplace_back(1); // should start with a partition
     for (size_t i = 1; i < values.size(); ++i)
@@ -216,7 +212,7 @@ void caf_main(actor_system& system, const config& cfg) {
     };
     // ---- actors ----
     // config for multi-level segmented scan
-    auto seg_scan1 = mngr.spawn_new(
+    auto seg_scan1 = mngr.spawn(
       prog, "upsweep", ndr,
       [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, uval n) {
@@ -234,7 +230,7 @@ void caf_main(actor_system& system, const config& cfg) {
       local<uval>{half_block * 2},    // heads buffer
       priv<uval, val>{}
     );
-    auto seg_scan2 = mngr.spawn_new(
+    auto seg_scan2 = mngr.spawn(
       prog, "block_scan",
       spawn_config{dim_vec{half_block}, {},
                    dim_vec{half_block}},
@@ -243,7 +239,7 @@ void caf_main(actor_system& system, const config& cfg) {
       in<uval,mref>{},                      // tree
       priv<uval, val>{}                     // length
     );
-    auto seg_scan3 = mngr.spawn_new(
+    auto seg_scan3 = mngr.spawn(
       prog, "downsweep", ndr,
       [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, const uref&,
@@ -262,7 +258,7 @@ void caf_main(actor_system& system, const config& cfg) {
       local<uval>{half_block * 2},  // tree buffer
       priv<uval, val>{}
     );
-    auto seg_scan4 = mngr.spawn_new(
+    auto seg_scan4 = mngr.spawn(
       prog, "downsweep_inc", ndr,
       [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, const uref&,
