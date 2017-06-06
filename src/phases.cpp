@@ -593,6 +593,12 @@ void caf_main(actor_system& system, const config& cfg) {
     // ---- produce fills -----
     auto fills = mngr.spawn(
       prog_fills, "produce_fills", ndr,
+      [](spawn_config& conf, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, const uref&, uval k) {
+          conf = spawn_config{dim_vec{(k + 1) / 2}};
+        });
+        return move(msg);
+      },
       in<uval,mref>{},in<uval,mref>{},
       out<uval,mref>{fills_k},
       priv<uval,val>{}
@@ -600,6 +606,12 @@ void caf_main(actor_system& system, const config& cfg) {
     // ---- fuse fill & literals ----
     auto fuse_prep = mngr.spawn(
       prog_fuse, "prepare_index", ndr,
+      [](spawn_config& conf, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, const uref&, uval k) {
+          conf = spawn_config{dim_vec{k}};
+        });
+        return move(msg);
+      },
       in<uval,mref>{},in<uval,mref>{},
       out<uval,mref>{k_double},
       priv<uval,val>{}
@@ -992,7 +1004,8 @@ void caf_main(actor_system& system, const config& cfg) {
     valid_or_exit(new_lits == test_lits, POSITION + " lits not equal");
 #endif // WITH_CPU_TESTS
 
-    self->send(fills, spawn_config{dim_vec{(k + 1) / 2}}, input_r, chids_r, k);
+    //self->send(fills, spawn_config{dim_vec{(k + 1) / 2}}, input_r, chids_r, k);
+    self->send(fills, input_r, chids_r, k);
     self->receive([&](uref& out) { std::swap(chids_r, out); });
 
 #ifdef WITH_CPU_TESTS
@@ -1021,7 +1034,8 @@ void caf_main(actor_system& system, const config& cfg) {
 
     uref index_r;
     size_t index_length = 0;
-    self->send(fuse_prep, spawn_config{dim_vec{k}}, chids_r, lits_r, k);
+    // self->send(fuse_prep, spawn_config{dim_vec{k}}, chids_r, lits_r, k);
+    self->send(fuse_prep, chids_r, lits_r, k);
     self->receive([&](uref& index) { index_r = index; });
     // new calculactions for scan
     self->send(sc_count, index_r, 2 * k);
