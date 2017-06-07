@@ -1,3 +1,12 @@
+/******************************************************************************
+ * Copyright (C) 2017                                                         *
+ * Raphael Hiesgen <raphael.hiesgen (at) haw-hamburg.de>                      *
+ *                                                                            *
+ * Distributed under the terms and conditions of the BSD 3-Clause License.    *
+ *                                                                            *
+ * If you did not receive a copy of the license files, see                    *
+ * http://opensource.org/licenses/BSD-3-Clause and                            *
+ ******************************************************************************/
 
 #include <cmath>
 #include <tuple>
@@ -31,7 +40,7 @@ namespace caf {
   template <>
   struct allowed_unsafe_message_type<opencl::dim_vec> : std::true_type {};
   template <>
-  struct allowed_unsafe_message_type<spawn_config> : std::true_type {};
+  struct allowed_unsafe_message_type<nd_range> : std::true_type {};
 }
 
 namespace {
@@ -181,19 +190,19 @@ void caf_main(actor_system& system, const config& cfg) {
       return round_up((n + 1) / 2, half_block);
     };
     auto nd_conf = [half_block, get_size](size_t dim) {
-      return spawn_config{dim_vec{get_size(dim)}, {}, dim_vec{half_block}};
+      return nd_range{dim_vec{get_size(dim)}, {}, dim_vec{half_block}};
     };
     auto reduced_ref = [&](const uref&, uval n) {
       // calculate number of groups from the group size from the values size
       return size_t{get_size(n) / half_block};
     };
     // spawn arguments
-    auto ndr = spawn_config{dim_vec{half_block}, {}, dim_vec{half_block}};
+    auto ndr = nd_range{dim_vec{half_block}, {}, dim_vec{half_block}};
     // actors
     auto phase1 = mngr.spawn(
       prog, "es_phase_1", ndr,
-      [nd_conf](spawn_config& conf, message& msg) -> optional<message> {
-        msg.apply([&](const uref&, uval n) { conf = nd_conf(n); });
+      [nd_conf](nd_range& range, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, uval n) { range = nd_conf(n); });
         return std::move(msg);
       },
       in_out<uval, mref, mref>{},
@@ -209,8 +218,8 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     auto phase3 = mngr.spawn(
       prog, "es_phase_3", ndr,
-      [nd_conf](spawn_config& conf, message& msg) -> optional<message> {
-        msg.apply([&](const uref&, const uref&, uval n) { conf = nd_conf(n); });
+      [nd_conf](nd_range& range, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, const uref&, uval n) { range = nd_conf(n); });
         return std::move(msg);
       },
       in_out<uval,mref,mref>{},

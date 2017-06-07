@@ -1,3 +1,12 @@
+/******************************************************************************
+ * Copyright (C) 2017                                                         *
+ * Raphael Hiesgen <raphael.hiesgen (at) haw-hamburg.de>                      *
+ *                                                                            *
+ * Distributed under the terms and conditions of the BSD 3-Clause License.    *
+ *                                                                            *
+ * If you did not receive a copy of the license files, see                    *
+ * http://opensource.org/licenses/BSD-3-Clause and                            *
+ ******************************************************************************/
 
 #include <cmath>
 #include <tuple>
@@ -31,7 +40,7 @@ namespace caf {
   template <>
   struct allowed_unsafe_message_type<opencl::dim_vec> : std::true_type {};
   template <>
-  struct allowed_unsafe_message_type<spawn_config> : std::true_type {};
+  struct allowed_unsafe_message_type<nd_range> : std::true_type {};
 }
 
 namespace {
@@ -194,7 +203,7 @@ void caf_main(actor_system& system, const config& cfg) {
       heads.emplace_back(flag_gen(gen) ? 1 : 0);
 
     // ---- spawn arguments ----
-    auto ndr = spawn_config{dim_vec{n}};
+    auto ndr = nd_range{dim_vec{n}};
     auto half_block = dev->get_max_work_group_size() / 2;
     auto get_size = [half_block](size_t n) -> size_t {
       return round_up((n + 1) / 2, half_block);
@@ -203,7 +212,7 @@ void caf_main(actor_system& system, const config& cfg) {
       return round_up((n + 1) / 2, block);
     };
     auto ndr_scan = [half_size_for, half_block](size_t dim) {
-      return spawn_config{dim_vec{half_size_for(dim,half_block)}, {},
+      return nd_range{dim_vec{half_size_for(dim,half_block)}, {},
                                   dim_vec{half_block}};
     };
     auto reduced_sscan = [&](const uref&, const uref&, const uref&, uval n) {
@@ -214,9 +223,9 @@ void caf_main(actor_system& system, const config& cfg) {
     // config for multi-level segmented scan
     auto seg_scan1 = mngr.spawn(
       prog, "upsweep", ndr,
-      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
+      [ndr_scan](nd_range& range, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, uval n) {
-          conf = ndr_scan(n);
+          range = ndr_scan(n);
         });
         return std::move(msg);
       },
@@ -232,7 +241,7 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     auto seg_scan2 = mngr.spawn(
       prog, "block_scan",
-      spawn_config{dim_vec{half_block}, {},
+      nd_range{dim_vec{half_block}, {},
                    dim_vec{half_block}},
       in_out<uval,mref,mref>{},             // data
       in_out<uval,mref,mref>{},             // partition
@@ -241,10 +250,10 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     auto seg_scan3 = mngr.spawn(
       prog, "downsweep", ndr,
-      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
+      [ndr_scan](nd_range& range, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, const uref&,
                       const uref&, uval n) {
-          conf = ndr_scan(n);
+          range = ndr_scan(n);
         });
         return std::move(msg);
       },
@@ -260,10 +269,10 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     auto seg_scan4 = mngr.spawn(
       prog, "downsweep_inc", ndr,
-      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
+      [ndr_scan](nd_range& range, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, const uref&,
                       const uref&, const uref&, uval n) {
-          conf = ndr_scan(n);
+          range = ndr_scan(n);
         });
         return std::move(msg);
       },

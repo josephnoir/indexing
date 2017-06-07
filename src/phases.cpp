@@ -1,3 +1,12 @@
+/******************************************************************************
+ * Copyright (C) 2017                                                         *
+ * Raphael Hiesgen <raphael.hiesgen (at) haw-hamburg.de>                      *
+ *                                                                            *
+ * Distributed under the terms and conditions of the BSD 3-Clause License.    *
+ *                                                                            *
+ * If you did not receive a copy of the license files, see                    *
+ * http://opensource.org/licenses/BSD-3-Clause and                            *
+ ******************************************************************************/
 
 #include <cmath>
 #include <chrono>
@@ -82,7 +91,7 @@ constexpr const char* kernel_file_10 = "./include/segmented_scan.cl";
 CAF_ALLOW_UNSAFE_MESSAGE_TYPE(uref);
 CAF_ALLOW_UNSAFE_MESSAGE_TYPE(radix_config);
 CAF_ALLOW_UNSAFE_MESSAGE_TYPE(opencl::dim_vec);
-CAF_ALLOW_UNSAFE_MESSAGE_TYPE(spawn_config);
+CAF_ALLOW_UNSAFE_MESSAGE_TYPE(nd_range);
 
 namespace {
 
@@ -430,7 +439,7 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // configuration parameters
   auto n = values.size();
-  auto ndr = spawn_config{dim_vec{n}};
+  auto ndr = nd_range{dim_vec{n}};
   auto one = [](uref&, uref&, uref&, uval) { return size_t{1}; };
   auto k_double = [](uref&, uref&, uval k) { return size_t{2 * k}; };
   auto fills_k = [](uref&, uref&, uval k) { return size_t{k}; };
@@ -443,14 +452,14 @@ void caf_main(actor_system& system, const config& cfg) {
     return round_up((n + 1) / 2, block);
   };
   auto ndr_scan = [half_size_for, half_block](size_t dim) {
-    return spawn_config{dim_vec{half_size_for(dim,half_block)}, {},
-                                dim_vec{half_block}};
+    return nd_range{dim_vec{half_size_for(dim,half_block)}, {},
+                    dim_vec{half_block}};
   };
   auto ndr_compact = [](uval dim) {
-    return spawn_config{dim_vec{round_up(dim, 128u)}, {}, dim_vec{128}};
+    return nd_range{dim_vec{round_up(dim, 128u)}, {}, dim_vec{128}};
   };
   auto ndr_block = [half_size_for](uval n, uval block) {
-    return spawn_config{dim_vec{half_size_for(n, block)}, {}, dim_vec{block}};
+    return nd_range{dim_vec{half_size_for(n, block)}, {}, dim_vec{block}};
   };
   auto reduced_scan = [&](const uref&, uval n) {
     // calculate number of groups from the group size from the values size
@@ -500,8 +509,8 @@ void caf_main(actor_system& system, const config& cfg) {
     threads_per_block,
     elements
   };
-  auto ndr_radix = spawn_config{dim_vec{threads_per_block * blocks}, {},
-                                dim_vec{threads_per_block}};
+  auto ndr_radix = nd_range{dim_vec{threads_per_block * blocks}, {},
+                            dim_vec{threads_per_block}};
   {
     auto start = high_resolution_clock::now();
     // create phases
@@ -562,8 +571,8 @@ void caf_main(actor_system& system, const config& cfg) {
     // stream compaction
     auto sc_count = mngr.spawn(
       prog_sc,"countElts", ndr,
-      [ndr_compact](spawn_config& conf, message& msg) -> optional<message> {
-        msg.apply([&](const uref&, uval n) { conf = ndr_compact(n); });
+      [ndr_compact](nd_range& range, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, uval n) { range = ndr_compact(n); });
         return std::move(msg);
       },
       out<uval,mref>{reduced_compact},
@@ -574,9 +583,9 @@ void caf_main(actor_system& system, const config& cfg) {
     // --> sum operation is handled by es actors belows (exclusive scan)
     auto sc_move = mngr.spawn(
       prog_sc, "moveValidElementsStaged", ndr,
-      [ndr_compact](spawn_config& conf, message& msg) -> optional<message> {
+      [ndr_compact](nd_range& range, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, uval n) {
-          conf = ndr_compact(n);
+          range = ndr_compact(n);
         });
         return std::move(msg);
       },
@@ -593,9 +602,9 @@ void caf_main(actor_system& system, const config& cfg) {
     // ---- produce fills -----
     auto fills = mngr.spawn(
       prog_fills, "produce_fills", ndr,
-      [](spawn_config& conf, message& msg) -> optional<message> {
+      [](nd_range& range, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, uval k) {
-          conf = spawn_config{dim_vec{(k + 1) / 2}};
+          range = nd_range{dim_vec{(k + 1) / 2}};
         });
         return move(msg);
       },
@@ -606,9 +615,9 @@ void caf_main(actor_system& system, const config& cfg) {
     // ---- fuse fill & literals ----
     auto fuse_prep = mngr.spawn(
       prog_fuse, "prepare_index", ndr,
-      [](spawn_config& conf, message& msg) -> optional<message> {
+      [](nd_range& range, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, uval k) {
-          conf = spawn_config{dim_vec{k}};
+          range = nd_range{dim_vec{k}};
         });
         return move(msg);
       },
@@ -619,9 +628,9 @@ void caf_main(actor_system& system, const config& cfg) {
     // compute column length
     auto col_prep = mngr.spawn(
       prog_column, "column_prepare", ndr,
-      [ndr_block](spawn_config& conf, message& msg) -> optional<message> {
+      [ndr_block](nd_range& range, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, uval n) {
-          conf = ndr_block(n, 512);
+          range = ndr_block(n, 512);
         });
         return std::move(msg);
       },
@@ -633,8 +642,8 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     auto col_conv = mngr.spawn(
       prog_column, "convert_heads", ndr,
-      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
-        msg.apply([&](const uref&, uval n) { conf = ndr_scan(n); });
+      [ndr_scan](nd_range& range, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, uval n) { range = ndr_scan(n); });
         return std::move(msg);
       },
       in<uval,mref>{},
@@ -644,8 +653,8 @@ void caf_main(actor_system& system, const config& cfg) {
     // exclusive scan
     auto scan1 = mngr.spawn(
       prog_es, "es_phase_1", ndr,
-      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
-        msg.apply([&](const uref&, uval n) { conf = ndr_scan(n); });
+      [ndr_scan](nd_range& range, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, uval n) { range = ndr_scan(n); });
         return std::move(msg);
       },
       in_out<uval, mref, mref>{},
@@ -655,16 +664,16 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     auto scan2 = mngr.spawn(
       prog_es, "es_phase_2",
-      spawn_config{dim_vec{half_block}, {}, dim_vec{half_block}},
+      nd_range{dim_vec{half_block}, {}, dim_vec{half_block}},
       in_out<uval,mref,mref>{},
       in_out<uval,mref,mref>{},
       priv<uval, val>{}
     );
     auto scan3 = mngr.spawn(
       prog_es, "es_phase_3", ndr,
-      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
+      [ndr_scan](nd_range& range, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, uval n) {
-          conf = ndr_scan(n);
+          range = ndr_scan(n);
         });
         return std::move(msg);
       },
@@ -675,9 +684,9 @@ void caf_main(actor_system& system, const config& cfg) {
     // config for multi-level segmented scan
     auto seg_scan1 = mngr.spawn(
       prog_sscan, "upsweep", ndr,
-      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
+      [ndr_scan](nd_range& range, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, uval n) {
-          conf = ndr_scan(n);
+          range = ndr_scan(n);
         });
         return std::move(msg);
       },
@@ -693,7 +702,7 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     auto seg_scan2 = mngr.spawn(
       prog_sscan, "block_scan",
-      spawn_config{dim_vec{half_block}, {},
+      nd_range{dim_vec{half_block}, {},
                    dim_vec{half_block}},
       in_out<uval,mref,mref>{},             // data
       in_out<uval,mref,mref>{},             // partition
@@ -702,10 +711,10 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     auto seg_scan3 = mngr.spawn(
       prog_sscan, "downsweep", ndr,
-      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
+      [ndr_scan](nd_range& range, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, const uref&,
                       const uref&, uval n) {
-          conf = ndr_scan(n);
+          range = ndr_scan(n);
         });
         return std::move(msg);
       },
@@ -721,10 +730,10 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     auto seg_scan4 = mngr.spawn(
       prog_sscan, "downsweep_inc", ndr,
-      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
+      [ndr_scan](nd_range& range, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, const uref&,
                       const uref&, const uref&, uval n) {
-          conf = ndr_scan(n);
+          range = ndr_scan(n);
         });
         return std::move(msg);
       },
@@ -1004,7 +1013,6 @@ void caf_main(actor_system& system, const config& cfg) {
     valid_or_exit(new_lits == test_lits, POSITION + " lits not equal");
 #endif // WITH_CPU_TESTS
 
-    //self->send(fills, spawn_config{dim_vec{(k + 1) / 2}}, input_r, chids_r, k);
     self->send(fills, input_r, chids_r, k);
     self->receive([&](uref& out) { std::swap(chids_r, out); });
 
@@ -1034,7 +1042,6 @@ void caf_main(actor_system& system, const config& cfg) {
 
     uref index_r;
     size_t index_length = 0;
-    // self->send(fuse_prep, spawn_config{dim_vec{k}}, chids_r, lits_r, k);
     self->send(fuse_prep, chids_r, lits_r, k);
     self->receive([&](uref& index) { index_r = index; });
     // new calculactions for scan

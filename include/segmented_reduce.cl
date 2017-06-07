@@ -1,4 +1,14 @@
-// For optimizations regarding bank conflicts, look at:
+/******************************************************************************
+ * Copyright (C) 2017                                                         *
+ * Raphael Hiesgen <raphael.hiesgen (at) haw-hamburg.de>                      *
+ *                                                                            *
+ * Distributed under the terms and conditions of the BSD 3-Clause License.    *
+ *                                                                            *
+ * If you did not receive a copy of the license files, see                    *
+ * http://opensource.org/licenses/BSD-3-Clause and                            *
+ ******************************************************************************/
+
+// For optimizations regarding bank conflicts, see:
 // - http://http.developer.nvidia.com/GPUGems3/gpugems3_ch39.html
 // - Scan Primitives for GPUs (Sengupta et al)
 
@@ -74,7 +84,7 @@ kernel void block_reduce(global uint* restrict data,
                          global uint* restrict part,
                          global uint* restrict flag,
                          uint len) {
-  // TODO: implemente
+  // TODO: implement
   /*
   local uint d[1024];
   local uint p[1024];

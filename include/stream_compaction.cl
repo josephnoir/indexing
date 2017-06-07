@@ -25,8 +25,9 @@
  *
  * Date:         23 Aug 2009
  * Author:       CUDA version by Imran Haque (ihaque@cs.stanford.edu),
- *               converted to OpenCL by Peter Eastman
- * Affiliation:  Stanford University
+ *               converted to OpenCL by Peter Eastman,
+ *               altered by Raphael Hiesgen (*)
+ * Affiliation:  Stanford University, (*) HAW Hamburg
  * License:      Public Domain
  *
  * For the indexing algorithm we implemented a separate scan (scan.cl) which is

@@ -1,4 +1,14 @@
 /******************************************************************************
+ * Copyright (C) 2017                                                         *
+ * Raphael Hiesgen <raphael.hiesgen (at) haw-hamburg.de>                      *
+ *                                                                            *
+ * Distributed under the terms and conditions of the BSD 3-Clause License.    *
+ *                                                                            *
+ * If you did not receive a copy of the license files, see                    *
+ * http://opensource.org/licenses/BSD-3-Clause and                            *
+ ******************************************************************************/
+
+/******************************************************************************
  * function: sort_rids_by_value                                               *
  * input:                                                                     *
  * output:                                                                    *
@@ -22,7 +32,7 @@ kernel void create_rids(global uint* restrict input,
 // Kernels for sorting
 
 /**
- * Sort found on: http://www.bealto.com/gpu-sorting_intro.html
+ * Sorts found on: http://www.bealto.com/gpu-sorting_intro.html
  * License:
  *  This code is released under the following license (BSD-style).
  *  --

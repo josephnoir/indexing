@@ -1,3 +1,12 @@
+/******************************************************************************
+ * Copyright (C) 2017                                                         *
+ * Raphael Hiesgen <raphael.hiesgen (at) haw-hamburg.de>                      *
+ *                                                                            *
+ * Distributed under the terms and conditions of the BSD 3-Clause License.    *
+ *                                                                            *
+ * If you did not receive a copy of the license files, see                    *
+ * http://opensource.org/licenses/BSD-3-Clause and                            *
+ ******************************************************************************/
 
 #include <cmath>
 #include <chrono>
@@ -133,7 +142,7 @@ void caf_main(actor_system& system, const config& /*cfg*/) {
 
   // create spawn configuration
   size_t n = 1;
-  auto index_space_overhead = spawn_config{dim_vec{n}};
+  auto index_space_overhead = nd_range{dim_vec{n}};
   // buffers for execution
   uvec config{static_cast<uval>(n)};
   {

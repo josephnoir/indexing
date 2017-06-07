@@ -1,3 +1,12 @@
+/******************************************************************************
+ * Copyright (C) 2017                                                         *
+ * Raphael Hiesgen <raphael.hiesgen (at) haw-hamburg.de>                      *
+ *                                                                            *
+ * Distributed under the terms and conditions of the BSD 3-Clause License.    *
+ *                                                                            *
+ * If you did not receive a copy of the license files, see                    *
+ * http://opensource.org/licenses/BSD-3-Clause and                            *
+ ******************************************************************************/
 
 #include <cmath>
 #include <chrono>
@@ -347,7 +356,7 @@ void caf_main(actor_system& system, const config& cfg) {
   auto worker = system.opencl_manager().spawn(
     mngr.create_program(source_contents.c_str(), "", dev),
     kernel_name,
-    spawn_config{dim_vec{gl_size}, {}, dim_vec{wg_size}},
+    nd_range{dim_vec{gl_size}, {}, dim_vec{wg_size}},
     in_out<vector<uint32_t>>{},             // config
     in_out<vector<uint32_t>>{},             // input
     out<vector<uint32_t>>{double_size},     // index

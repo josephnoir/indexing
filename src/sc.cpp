@@ -1,3 +1,12 @@
+/******************************************************************************
+ * Copyright (C) 2017                                                         *
+ * Raphael Hiesgen <raphael.hiesgen (at) haw-hamburg.de>                      *
+ *                                                                            *
+ * Distributed under the terms and conditions of the BSD 3-Clause License.    *
+ *                                                                            *
+ * If you did not receive a copy of the license files, see                    *
+ * http://opensource.org/licenses/BSD-3-Clause and                            *
+ ******************************************************************************/
 
 #include <cmath>
 #include <tuple>
@@ -32,7 +41,7 @@ namespace caf {
   template <>
   struct allowed_unsafe_message_type<opencl::dim_vec> : std::true_type {};
   template <>
-  struct allowed_unsafe_message_type<spawn_config> : std::true_type {};
+  struct allowed_unsafe_message_type<nd_range> : std::true_type {};
 }
 
 namespace {
@@ -163,11 +172,11 @@ void caf_main(actor_system& system, const config& cfg) {
       return size_t{get_size(n) / half_block};
     };
     auto ndr_scan = [half_size_for, half_block](size_t dim) {
-      return spawn_config{dim_vec{half_size_for(dim,half_block)}, {},
+      return nd_range{dim_vec{half_size_for(dim,half_block)}, {},
                                   dim_vec{half_block}};
     };
     auto ndr_compact = [](uval dim) {
-      return spawn_config{dim_vec{round_up(dim, 128u)}, {}, dim_vec{128}};
+      return nd_range{dim_vec{round_up(dim, 128u)}, {}, dim_vec{128}};
     };
     auto reduced_compact = [](const uref&, uval n) {
       return size_t{round_up(n, 128u) / 128u};
@@ -175,13 +184,13 @@ void caf_main(actor_system& system, const config& cfg) {
     auto one = [](uref&, uref&, uref&, uval) { return size_t{1}; };
     auto k_compact = [](uref&, uref&, uref&, uval k) { return size_t{k}; };
     // spawn arguments
-    auto ndr = spawn_config{dim_vec{half_block}, {}, dim_vec{half_block}};
+    auto ndr = nd_range{dim_vec{half_block}, {}, dim_vec{half_block}};
     // actors
     // exclusive scan
     auto scan1 = mngr.spawn(
       prog_es, "es_phase_1", ndr,
-      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
-        msg.apply([&](const uref&, uval n) { conf = ndr_scan(n); });
+      [ndr_scan](nd_range& range, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, uval n) { range = ndr_scan(n); });
         return std::move(msg);
       },
       in_out<uval, mref, mref>{},
@@ -191,16 +200,16 @@ void caf_main(actor_system& system, const config& cfg) {
     );
     auto scan2 = mngr.spawn(
       prog_es, "es_phase_2",
-      spawn_config{dim_vec{half_block}, {}, dim_vec{half_block}},
+      nd_range{dim_vec{half_block}, {}, dim_vec{half_block}},
       in_out<uval,mref,mref>{},
       in_out<uval,mref,mref>{},
       priv<uval, val>{}
     );
     auto scan3 = mngr.spawn(
       prog_es, "es_phase_3", ndr,
-      [ndr_scan](spawn_config& conf, message& msg) -> optional<message> {
+      [ndr_scan](nd_range& range, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, uval n) {
-          conf = ndr_scan(n);
+          range = ndr_scan(n);
         });
         return std::move(msg);
       },
@@ -211,8 +220,8 @@ void caf_main(actor_system& system, const config& cfg) {
     // stream compaction
     auto sc_count = mngr.spawn(
       prog_sc,"countElts", ndr,
-      [ndr_compact](spawn_config& conf, message& msg) -> optional<message> {
-        msg.apply([&](const uref&, uval n) { conf = ndr_compact(n); });
+      [ndr_compact](nd_range& range, message& msg) -> optional<message> {
+        msg.apply([&](const uref&, uval n) { range = ndr_compact(n); });
         return std::move(msg);
       },
       out<uval,mref>{reduced_compact},
@@ -223,9 +232,9 @@ void caf_main(actor_system& system, const config& cfg) {
     // --> sum operation is handled by es actors belows (exclusive scan)
     auto sc_move = mngr.spawn(
       prog_sc, "moveValidElementsStaged", ndr,
-      [ndr_compact](spawn_config& conf, message& msg) -> optional<message> {
+      [ndr_compact](nd_range& range, message& msg) -> optional<message> {
         msg.apply([&](const uref&, const uref&, const uref&, uval n) {
-          conf = ndr_compact(n);
+          range = ndr_compact(n);
         });
         return std::move(msg);
       },

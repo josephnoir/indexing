@@ -1,3 +1,12 @@
+/******************************************************************************
+ * Copyright (C) 2017                                                         *
+ * Raphael Hiesgen <raphael.hiesgen (at) haw-hamburg.de>                      *
+ *                                                                            *
+ * Distributed under the terms and conditions of the BSD 3-Clause License.    *
+ *                                                                            *
+ * If you did not receive a copy of the license files, see                    *
+ * http://opensource.org/licenses/BSD-3-Clause and                            *
+ ******************************************************************************/
 
 #include <cmath>
 #include <tuple>
@@ -31,7 +40,7 @@ namespace caf {
   template <>
   struct allowed_unsafe_message_type<opencl::dim_vec> : std::true_type {};
   template <>
-  struct allowed_unsafe_message_type<spawn_config> : std::true_type {};
+  struct allowed_unsafe_message_type<nd_range> : std::true_type {};
 }
 
 namespace {
@@ -199,7 +208,7 @@ void caf_main(actor_system& system, const config& cfg) {
       return round_up((n + 1) / 2, group_size);
     };
     auto nd_conf = [group_size, get_size](size_t dim) {
-      return spawn_config{dim_vec{get_size(dim)}, {}, dim_vec{group_size}};
+      return nd_range{dim_vec{get_size(dim)}, {}, dim_vec{group_size}};
     };
     auto reduced_vec = [&](const uvec&, const uvec&, const uvec&, uval n) {
       // calculate number of groups from the group size from the values size
@@ -216,7 +225,7 @@ void caf_main(actor_system& system, const config& cfg) {
     // ---- ndranges ----
     auto ndr_upsweep_01 = nd_conf(n_outer);
     auto ndr_upsweep_02 = nd_conf(n_inner);
-    auto ndr_block = spawn_config{dim_vec{group_size}, {}, dim_vec{group_size}};
+    auto ndr_block = nd_range{dim_vec{group_size}, {}, dim_vec{group_size}};
     auto ndr_downsweep_02 = ndr_upsweep_02;
     auto ndr_downsweep_01 = ndr_upsweep_01;
     // ---- actors ----

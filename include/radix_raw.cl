@@ -1,6 +1,4 @@
-
-typedef struct GPUConstants
-{
+typedef struct GPUConstants {
      int numRadices;
      int numBlocks;
      int numGroupsPerBlock;
