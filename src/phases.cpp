@@ -1135,8 +1135,7 @@ void caf_main(actor_system& system, const config& cfg) {
     // stream compaction
     self->send(sc_count, heads_r, k);
     self->receive([&](uref& blocks, uref& heads) {
-      dev->synchronize();
-      self->send(scan1, blocks, k);
+      self->send(scan1, blocks, as_uval(blocks.size());
       heads_r = heads;
     });
     // cout << "Count step done." << endl;
@@ -1144,7 +1143,7 @@ void caf_main(actor_system& system, const config& cfg) {
       self->send(scan2, data, incs, as_uval(incs.size()));
     });
     self->receive([&](uref& data, uref& incs) {
-      self->send(scan3, data, incs, k);
+      self->send(scan3, data, incs, as_uval(data.size()));
     });
     self->receive([&](const uref& results) {
       self->send(sc_move, tmp_r, heads_r, results, k);
