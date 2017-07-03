@@ -753,8 +753,10 @@ void caf_main(actor_system& system, const config& cfg) {
     auto to = high_resolution_clock::now();
     auto from = high_resolution_clock::now();
 #endif
+
     // kernel executions
     uref input_r = dev->global_argument(values);
+
 #ifdef SHOW_TIME_CONSUMPTION
     dev->synchronize();
     to = high_resolution_clock::now();
@@ -762,6 +764,7 @@ void caf_main(actor_system& system, const config& cfg) {
          << duration_cast<microseconds>(to - from).count() << " us" << endl;
     from = high_resolution_clock::now();
 #endif
+
     self->send(rids_1, input_r);
     uref rids_r;
     self->receive([&](uref& in, uref& rids) {
@@ -787,64 +790,25 @@ void caf_main(actor_system& system, const config& cfg) {
       auto r_counters = dev->scratch_argument<uval>(counters);
       auto r_prefixes = dev->scratch_argument<uval>(prefixes);
       uint32_t iterations = cardinality / l_val;
-      vector<size_t> count_t(iterations);
-      vector<size_t> scan_t(iterations);
-      vector<size_t> move_t(iterations);
-      auto start = high_resolution_clock::now();
-      auto stop = high_resolution_clock::now();
       for (uint32_t i = 0; i < iterations; ++i) {
         uval offset = l_val * i;
         if (i > 0) {
           std::swap(r_keys_in, r_keys_out);
           std::swap(r_values_in, r_values_out);
         }
-        start = high_resolution_clock::now();
         self->send(radix_count, r_keys_in, r_counters, offset);
         self->receive([&](uref& /*k*/, uref& /*c*/) {
-          dev->synchronize();
-          stop = high_resolution_clock::now();
-          count_t[i] = duration_cast<microseconds>(stop - start).count();
-          start = high_resolution_clock::now();
           self->send(radix_scan, r_keys_in, r_counters, r_prefixes, offset);
         });
         self->receive([&](uref& /*k*/, uref& /*c*/, uref& /*p*/) {
-          dev->synchronize();
-          stop = high_resolution_clock::now();
-          scan_t[i] = duration_cast<microseconds>(stop - start).count();
-          start = high_resolution_clock::now();
           self->send(radix_move, r_keys_in, r_keys_out, r_values_in, r_values_out,
                                  r_counters, r_prefixes, offset);
         });
         self->receive([&](uref& /*ki*/, uref& /*ko*/, uref& /*vi*/, uref& /*vo*/,
                           uref& /*c*/, uref& /*p*/) { });
-        dev->synchronize();
-        stop = high_resolution_clock::now();
-        move_t[i] = duration_cast<microseconds>(stop - start).count();
       }
       input_r = r_keys_out;
       rids_r = r_values_out;
-      size_t total_t = 0;
-      total_t = 0;
-      cout << "count: ";
-      for (auto t : count_t){
-        cout << setw(10) << t << "us";
-        total_t += t;
-      }
-      cout << " = " << total_t  << "us" << endl;
-      total_t = 0;
-      cout << "scan:  ";
-      for (auto t : scan_t){
-        cout << setw(10) << t << "us";
-        total_t += t;
-      }
-      cout << " = " << total_t  << "us" << endl;
-      total_t = 0;
-      cout << "move:  ";
-      for (auto t : move_t){
-        cout << setw(10) << t << "us";
-        total_t += t;
-      }
-      cout << " = " << total_t  << "us" << endl;
     }
 
 #ifdef WITH_CPU_TESTS
@@ -1077,7 +1041,6 @@ void caf_main(actor_system& system, const config& cfg) {
     // temp  -> the tmp array used by the algorithm
     // heads -> stores the heads array for the stream compaction
     uref tmp_r;
-    auto tc1 = high_resolution_clock::now();
     self->send(col_prep, chids_r, input_r, as_uval(k));
     self->receive([&](uref& chids, uref& input, uref& tmp, uref& heads) {
       chids_r = move(chids);
@@ -1085,8 +1048,6 @@ void caf_main(actor_system& system, const config& cfg) {
       tmp_r = move(tmp);
       heads_r = move(heads);
     });
-    dev->synchronize();
-    auto tc2 = high_resolution_clock::now();
 
     // cout << "Col: prepare done." << endl;
     // --- segmented scan ---
@@ -1122,23 +1083,17 @@ void caf_main(actor_system& system, const config& cfg) {
       tmp_r = std::move(results);
       self->send(col_conv, std::move(*heads_copy), k);
     });
-    dev->synchronize();
-    auto tc4 = high_resolution_clock::now();
     self->receive([&](const uref& new_heads) {
       heads_r = new_heads;
     });
-    dev->synchronize();
-    auto tc5 = high_resolution_clock::now();
-    // cout << "Col: scan done." << endl;
 
     uval keycount = 0;
     // stream compaction
     self->send(sc_count, heads_r, k);
     self->receive([&](uref& blocks, uref& heads) {
-      self->send(scan1, blocks, as_uval(blocks.size());
+      self->send(scan1, blocks, as_uval(blocks.size()));
       heads_r = heads;
     });
-    // cout << "Count step done." << endl;
     self->receive([&](uref& data, uref& incs) {
       self->send(scan2, data, incs, as_uval(incs.size()));
     });
@@ -1152,9 +1107,6 @@ void caf_main(actor_system& system, const config& cfg) {
       keycount = count[0];
       heads_r = out;
     });
-    //cout << "Merge step done." << endl;
-    dev->synchronize();
-    auto tc6 = high_resolution_clock::now();
 
     uref offsets_r;
 
@@ -1175,23 +1127,12 @@ void caf_main(actor_system& system, const config& cfg) {
     self->receive([&](uref& results) {
       offsets_r = std::move(results);
     });
-    dev->synchronize();
-    auto tc7 = high_resolution_clock::now();
 
 #ifdef SHOW_TIME_CONSUMPTION
     dev->synchronize();
     to = high_resolution_clock::now();
     cout << DESCRIPTION("Column length:\t\t")
          << duration_cast<microseconds>(to - from).count() << " us" << endl;
-    cout << " > preparations:   " << duration_cast<microseconds>(tc2 - tc1).count() << " us" << endl;
-    /*
-    cout << " > segmented scan: " << duration_cast<microseconds>(tc3 - tc2).count() << " us" << endl;
-    cout << " > make inclusive: " << duration_cast<microseconds>(tc4 - tc3).count() << " us" << endl;
-    */
-    cout << " > segmented scan: " << duration_cast<microseconds>(tc4 - tc2).count() << " us" << endl;
-    cout << " > convert heads:  " << duration_cast<microseconds>(tc5 - tc4).count() << " us" << endl;
-    cout << " > compaction:     " << duration_cast<microseconds>(tc6 - tc5).count() << " us" << endl;
-    cout << " > scan:           " << duration_cast<microseconds>(tc7 - tc6).count() << " us" << endl;
     from = high_resolution_clock::now();
 #endif
 
