@@ -68,100 +68,32 @@ else ()
   message(FATAL_ERROR "Could not find CAF")
 endif ()
 
-find_package(VAST)
-if (VAST_FOUND)
-  include_directories(${VAST_INCLUDE_DIRS})
-else ()
-  message(STATUS "Could not find VAST")
-endif ()
-
 find_package(OpenCL REQUIRED)
 
 include_directories(. include)
 
-set(SOURCES_CPU
-  src/cpu.cpp
-)
-set(SOURCES_GPU
-  src/gpu.cpp
-)
-set(SOURCES_PHASES
-  src/phases.cpp
-)
-set(SOURCES_VAST
-  src/vst.cpp
+set(SOURCES_SORT
+  src/sort.cpp
 )
 set(SOURCE_GENERATOR
   src/generate_test_data.cpp
 )
-set(SOURCE_PLAIN
-  src/plain.cpp
-)
-set(SOURCES_OVERHEAD
-  src/overhead_benchmark.cpp
-)
-set(SOURCES_SCAN
-  src/scan.cpp
-)
-set(SOURCES_SEGMENTED_SCAN
-  src/segmented_scan.cpp
-)
-set(SOURCES_STREAM_COMPACTION
-  src/sc.cpp
-)
+
 file(GLOB_RECURSE HEADERS "include/*.hpp" "include/*.cl")
 
-add_executable(cpu
-  ${SOURCES_CPU}
-  ${HEADERS}
-)
-target_link_libraries(cpu
-  ${CMAKE_DL_LIBS}
-  ${CAF_LIBRARY_CORE}
-  ${CAF_LIBRARY_IO}
-)
-
-add_executable(gpu
-  ${SOURCES_GPU}
+add_executable(sort
+  ${SOURCES_SORT}
   ${HEADERS}
   ${OpenCL_INCLUDE_DIRS}
   ${CAF_INCLUDE_DIR_OPENCL}
 )
-target_link_libraries(gpu
+target_link_libraries(sort
   ${CMAKE_DL_LIBS}
   ${CAF_LIBRARY_CORE}
   ${CAF_LIBRARY_IO}
   ${CAF_LIBRARY_OPENCL}
   ${OpenCL_LIBRARIES}
 )
-
-add_executable(phases
-  ${SOURCES_PHASES}
-  ${HEADERS}
-  ${OpenCL_INCLUDE_DIRS}
-  ${CAF_INCLUDE_DIR_OPENCL}
-)
-target_link_libraries(phases
-  ${CMAKE_DL_LIBS}
-  ${CAF_LIBRARY_CORE}
-  ${CAF_LIBRARY_IO}
-  ${CAF_LIBRARY_OPENCL}
-  ${OpenCL_LIBRARIES}
-)
-
-if (VAST_FOUND)
-add_executable(vst
-  ${SOURCES_VAST}
-  ${HEADERS}
-  ${VAST_INCLUDE_DIR}
-)
-target_link_libraries(vst
-  ${CMAKE_DL_LIBS}
-  ${CAF_LIBRARY_CORE}
-  ${CAF_LIBRARY_IO}
-  ${VAST_LIBRARY}
-)
-endif()
 
 add_executable(generator
   ${SOURCE_GENERATOR}
@@ -170,72 +102,4 @@ add_executable(generator
 target_link_libraries(generator
   ${CMAKE_DL_LIBS}
   ${CAF_LIBRARY_CORE}
-)
-
-add_executable(plain
-  ${SOURCE_PLAIN}
-  ${HEADERS}
-  ${OpenCL_INCLUDE_DIRS}
-)
-target_link_libraries(plain
-  ${CMAKE_DL_LIBS}
-  ${OpenCL_LIBRARIES}
-  ${CAF_LIBRARY_CORE}
-  ${CAF_LIBRARY_IO}
-)
-
-add_executable(overhead
-  ${SOURCES_OVERHEAD}
-  ${HEADERS}
-  ${OpenCL_INCLUDE_DIRS}
-  ${CAF_INCLUDE_DIR_OPENCL}
-)
-target_link_libraries(overhead
-  ${CMAKE_DL_LIBS}
-  ${CAF_LIBRARY_CORE}
-  ${CAF_LIBRARY_IO}
-  ${CAF_LIBRARY_OPENCL}
-  ${OpenCL_LIBRARIES}
-)
-
-add_executable(scan
-  ${SOURCES_SCAN}
-  ${HEADERS}
-  ${OpenCL_INCLUDE_DIRS}
-  ${CAF_INCLUDE_DIR_OPENCL}
-)
-target_link_libraries(scan
-  ${CMAKE_DL_LIBS}
-  ${CAF_LIBRARY_CORE}
-  ${CAF_LIBRARY_IO}
-  ${CAF_LIBRARY_OPENCL}
-  ${OpenCL_LIBRARIES}
-)
-
-add_executable(segmented_scan
-  ${SOURCES_SEGMENTED_SCAN}
-  ${HEADERS}
-  ${OpenCL_INCLUDE_DIRS}
-  ${CAF_INCLUDE_DIR_OPENCL}
-)
-target_link_libraries(segmented_scan
-  ${CMAKE_DL_LIBS}
-  ${CAF_LIBRARY_CORE}
-  ${CAF_LIBRARY_IO}
-  ${CAF_LIBRARY_OPENCL}
-  ${OpenCL_LIBRARIES}
-)
-
-add_executable(sc
-  ${SOURCES_STREAM_COMPACTION}
-  ${HEADERS}
-  ${OpenCL_INCLUDE_DIRS}
-  ${CAF_INCLUDE_DIR_OPENCL}
-)
-target_link_libraries(sc
-  ${CMAKE_DL_LIBS}
-  ${CAF_LIBRARY_CORE}
-  ${CAF_LIBRARY_IO}
-  ${CAF_LIBRARY_OPENCL}
-  ${OpenCL_LIBRARIES}
 )
