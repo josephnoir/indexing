@@ -124,6 +124,7 @@ void caf_main(actor_system& system, const config& cfg) {
          << endl;
     return;
   }
+  cout << "reading values from '" << cfg.filename << "' ..." << endl;
   ifstream source{cfg.filename, std::ios::in};
   uval next;
   while (source >> next)
@@ -133,6 +134,7 @@ void caf_main(actor_system& system, const config& cfg) {
     auto itr = max_element(values.begin(), values.end());
     bound = *itr;
   }
+  cout << "got '" << values.size() << "' values" << endl;
 
   auto& mngr = system.opencl_manager();
 
@@ -177,8 +179,8 @@ void caf_main(actor_system& system, const config& cfg) {
   uint32_t groups = groups_per_block * blocks;
   uint32_t elements_per_group = (elements / groups) + 1;
   // groups share a counter and each group requires a counter per radix
-  uint32_t counters = radices * groups_per_block * blocks;
-  uint32_t prefixes = radices;
+  uint32_t number_of_counters = radices * groups_per_block * blocks;
+  uint32_t number_of_prefixes = radices;
   radix_config rc = {
     radices,
     blocks,
@@ -228,60 +230,59 @@ void caf_main(actor_system& system, const config& cfg) {
     scoped_actor self{system};
     auto start_sort = chrono::high_resolution_clock::now();
     // kernel executions
-    uref input_r = dev->global_argument(values);
+    uref input = dev->global_argument(values);
     {
       // radix sort for values by key using inpt as keys and temp as values
-      auto r_keys_in = input_r;
-      auto r_keys_out = dev->scratch_argument<uval>(n, buffer_type::input_output);
-      auto r_values_out = dev->scratch_argument<uval>(n, buffer_type::input_output);
-      // TODO: see how performance is affected if we create new arrays each time
-      auto r_counters = dev->scratch_argument<uval>(counters);
-      auto r_prefixes = dev->scratch_argument<uval>(prefixes);
+      auto keys_in = input;
+      auto keys_out = dev->scratch_argument<uval>(n, buffer_type::input_output);
+      auto counters = dev->scratch_argument<uval>(number_of_counters);
+      auto prefixes = dev->scratch_argument<uval>(number_of_prefixes);
       uint32_t iterations = cardinality / l_val;
       for (uint32_t i = 0; i < iterations; ++i) {
         uval offset = l_val * i;
-        if (i > 0)
-          std::swap(r_keys_in, r_keys_out);
-        self->send(radix_count, r_keys_in, r_counters, offset);
-        self->receive([&](uref& /*k*/, uref& /*c*/) {
-          self->send(radix_scan, r_keys_in, r_counters, r_prefixes, offset);
+        self->send(radix_count, keys_in, counters, offset);
+        self->receive([&](uref& k, uref& c) {
+          self->send(radix_scan, k, c, prefixes, offset);
         });
-        self->receive([&](uref& /*k*/, uref& /*c*/, uref& /*p*/) {
-          self->send(radix_move, r_keys_in, r_keys_out, r_counters, r_prefixes, offset);
+        self->receive([&](uref& k, uref& c, uref& p) {
+          self->send(radix_move, k, keys_out, c, p, offset);
         });
-        self->receive([&](uref& /*ki*/, uref& /*ko*/, uref& /*c*/, uref& /*p*/) { });
+        self->receive([&](uref& i, uref& o, uref& c, uref& p) {
+          std::swap(keys_in, o);
+          std::swap(keys_out, i);
+          counters = std::move(c);
+          prefixes = std::move(p);
+        });
       }
-      input_r = r_keys_out;
+      input = keys_in;
     }
-    auto eres = input_r.data();
-    auto stop_sort = chrono::high_resolution_clock::now();
-    std::cout << "radix sort:\t\t"
-              << duration_cast<microseconds>(stop_sort - start_sort).count()
-              << " us" << endl;
+    auto eres = input.data();
     if (!eres) {
-      cout << "can't read keys back (" << system.render(eres.error())
-           << ")" << endl;
+      cout << "error: " << system.render(eres.error()) << endl;
       return;
     }
+    auto stop_sort = chrono::high_resolution_clock::now();
+    cout << "radix sort:       " << right << setw(7)
+         << duration_cast<microseconds>(stop_sort - start_sort).count()
+         << " us" << endl;
+    
     start_sort = chrono::high_resolution_clock::now();
     stable_sort(begin(values), end(values));
     stop_sort = chrono::high_resolution_clock::now();
-    
-    std::cout << "std::stable_sort:\t"
-              << duration_cast<microseconds>(stop_sort - start_sort).count()
-              << " us" << endl;
-    auto result = *eres;
-    vector<size_t> failures;
-    for (size_t i = 0; i < result.size(); ++i)
-      if (result[i] != values[i])
-        failures.push_back(i);
-    if (!failures.empty()) {
-      cout << "radix sort failed for " << failures.size() << " values" << endl;
-      return;
-    }
+    cout << "std::stable_sort: " << right << setw(7)
+         << duration_cast<microseconds>(stop_sort - start_sort).count()
+         << " us" << endl;
 
     auto stop = high_resolution_clock::now();
-    cout << "total:\t\t\t" << duration_cast<microseconds>(stop - start).count() << " us" << endl;
+    cout << "total:            "  << right << setw(7)
+         << duration_cast<microseconds>(stop - start).count() << " us" << endl;
+    
+    auto result = *eres;
+    auto failures = 0;
+    for (size_t i = 0; i < result.size(); ++i)
+      if (result[i] != values[i])
+        ++failures;
+    cout << "radix sort failed for " << failures << " values" << endl;
   }
   // clean up
   system.await_all_actors_done();
