@@ -326,22 +326,22 @@ void caf_main(actor_system& system, const config& cfg) {
 
   // create GPU worker
   auto& mngr = system.opencl_manager();
-  auto opt = mngr.get_device_if([&](const device_ptr dev) {
+  auto opt = mngr.find_device_if([&](const device_ptr dev) {
       if (cfg.device_name.empty())
         return true;
-      return dev->get_name() == cfg.device_name;
+      return dev->name() == cfg.device_name;
   });
   if (!opt) {
     cerr << "Device " << cfg.device_name << " not found." << endl;
     return;
   } else {
-    cout << "Using device named '" << (*opt)->get_name() << "'." << endl;
+    cout << "Using device named '" << (*opt)->name() << "'." << endl;
   }
   auto dev = *opt;
-  auto jobs = cfg.jobs == 0 ? dev->get_max_compute_units() : cfg.jobs;
+  auto jobs = cfg.jobs == 0 ? dev->max_compute_units() : cfg.jobs;
   auto batch_size = min(cfg.batch_size, static_cast<uint32_t>(values.size()));
   auto wg_size = min(batch_size,
-                     static_cast<uint32_t>(dev->get_max_work_group_size()));
+                     static_cast<uint32_t>(dev->max_work_group_size()));
   auto wg_num = cfg.work_groups;
   auto gl_size = wg_size * wg_num; // must be multiple of wg_size
   auto double_size = [](const vector<uint32_t>&, const vector<uint32_t>& in) {

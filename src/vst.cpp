@@ -58,7 +58,7 @@ void caf_main(actor_system&, const config& cfg) {
                5,  9,  0,  3,  2, 19,  5, 23, 22, 10,
                6, 22};
   } else {
-    cout << "Reading data from '" << cfg.filename << "' ... " << flush;
+    //cout << "Reading data from '" << cfg.filename << "' ... " << flush;
     ifstream source{cfg.filename, std::ios::in};
     uint32_t next;
     while (source >> next) {
@@ -66,13 +66,13 @@ void caf_main(actor_system&, const config& cfg) {
     }
   }
   auto amount = values.size();
-  cout << "'" << amount << "' values." << endl;
+  //cout << "'" << amount << "' values." << endl;
   auto bound = cfg.bound;
   if (bound == 0 && amount > 0) {
     auto itr = max_element(values.begin(), values.end());
     bound = *itr;
   }
-  cout << "Maximum value is '" << bound << "'." << endl;
+  //cout << "Maximum value is '" << bound << "'." << endl;
 
   /*
   // Extract key set
@@ -88,20 +88,19 @@ void caf_main(actor_system&, const config& cfg) {
     bmi.push_back(val);
   auto stop = high_resolution_clock::now();
 
-  if (cfg.print_results) {
-    // print index by key
-    auto& coder = bmi.coder();
-    cout << coder << endl;
-    /*
-    auto& storage = coder.storage();
-    for (auto& key : keys)
-      cout << "Index for value " << key << ":" << endl
-           << storage[key] << endl;
-    */
-  }
-  cout << "Time: '"
-       << duration_cast<milliseconds>(stop - start).count()
-       << "' ms" << endl;
+  //if (cfg.print_results) {
+    //// print index by key
+    //auto& coder = bmi.coder();
+    //cout << coder << endl;
+    //[>
+    //auto& storage = coder.storage();
+    //for (auto& key : keys)
+      //cout << "Index for value " << key << ":" << endl
+           //<< storage[key] << endl;
+    //*/
+  //}
+  cout //<< "Time: "
+       << duration_cast<microseconds>(stop - start).count() << " us" << endl;
 }
 
 CAF_MAIN()

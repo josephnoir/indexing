@@ -30,7 +30,7 @@
 
 //#define WITH_CPU_TESTS
 #define SHOW_TIME_CONSUMPTION
-#define WITH_DESCRIPTION
+//#define WITH_DESCRIPTION
 #ifdef WITH_CPU_TESTS
 # undef SHOW_TIME_CONSUMPTION
 #endif // WITH_CPU_TESTS
@@ -406,19 +406,19 @@ void caf_main(actor_system& system, const config& cfg) {
   auto& mngr = system.opencl_manager();
 
   // get device named in config ...
-  auto opt = mngr.get_device_if([&](const device_ptr dev) {
+  auto opt = mngr.find_device_if([&](const device_ptr dev) {
     if (cfg.device_name.empty())
       return true;
-    return dev->get_name() == cfg.device_name;
+    return dev->name() == cfg.device_name;
   });
   // ... or first one available
   if (!opt)
-    opt = mngr.get_device_if([&](const device_ptr) { return true; });
+    opt = mngr.find_device_if([&](const device_ptr) { return true; });
   if (!opt) {
     cerr << "No device found." << endl;
     return;
   }
-  cout << "Using device '" << (*opt)->get_name() << "'." << endl;
+  //cout << "Using device '" << (*opt)->name() << "'." << endl;
   auto dev = *opt;
 
 #ifdef WITH_CPU_TESTS
@@ -444,7 +444,7 @@ void caf_main(actor_system& system, const config& cfg) {
   auto k_double = [](uref&, uref&, uval k) { return size_t{2 * k}; };
   auto fills_k = [](uref&, uref&, uval k) { return size_t{k}; };
   // segmented scan
-  auto half_block = dev->get_max_work_group_size() / 2;
+  auto half_block = dev->max_work_group_size() / 2;
   auto get_size = [half_block](size_t n) -> size_t {
     return round_up((n + 1) / 2, half_block);
   };
@@ -797,19 +797,87 @@ void caf_main(actor_system& system, const config& cfg) {
           std::swap(r_values_in, r_values_out);
         }
         self->send(radix_count, r_keys_in, r_counters, offset);
-        self->receive([&](uref& /*k*/, uref& /*c*/) {
+        self->receive([&](uref&, uref&) {
           self->send(radix_scan, r_keys_in, r_counters, r_prefixes, offset);
         });
-        self->receive([&](uref& /*k*/, uref& /*c*/, uref& /*p*/) {
+        self->receive([&](uref&, uref&, uref&) {
           self->send(radix_move, r_keys_in, r_keys_out, r_values_in, r_values_out,
                                  r_counters, r_prefixes, offset);
         });
-        self->receive([&](uref& /*ki*/, uref& /*ko*/, uref& /*vi*/, uref& /*vo*/,
-                          uref& /*c*/, uref& /*p*/) { });
+        self->receive([&](uref&, uref&, uref&, uref& , uref&, uref&) { });
       }
       input_r = r_keys_out;
       rids_r = r_values_out;
     }
+
+    //{
+      //// radix sort for values by key using inpt as keys and temp as values
+      //auto r_keys_in = input_r;
+      //auto r_values_in = rids_r;
+      //auto r_keys_out = dev->scratch_argument<uval>(n, buffer_type::input_output);
+      //auto r_values_out = dev->scratch_argument<uval>(n, buffer_type::input_output);
+      //// TODO: see how performance is affected if we create new arrays each time
+      //auto r_counters = dev->scratch_argument<uval>(counters);
+      //auto r_prefixes = dev->scratch_argument<uval>(prefixes);
+      //uint32_t iterations = cardinality / l_val;
+      //vector<size_t> count_t(iterations);
+      //vector<size_t> scan_t(iterations);
+      //vector<size_t> move_t(iterations);
+      //auto start = high_resolution_clock::now();
+      //auto stop = high_resolution_clock::now();
+      //for (uint32_t i = 0; i < iterations; ++i) {
+        //uval offset = l_val * i;
+        //if (i > 0) {
+          //std::swap(r_keys_in, r_keys_out);
+          //std::swap(r_values_in, r_values_out);
+        //}
+        //start = high_resolution_clock::now();
+        //self->send(radix_count, r_keys_in, r_counters, offset);
+        //self->receive([&](uref&, uref&) {
+          //dev->synchronize();
+          //stop = high_resolution_clock::now();
+          //count_t[i] = duration_cast<microseconds>(stop - start).count();
+          //start = high_resolution_clock::now();
+          //self->send(radix_scan, r_keys_in, r_counters, r_prefixes, offset);
+        //});
+        //self->receive([&](uref&, uref&, uref&) {
+          //dev->synchronize();
+          //stop = high_resolution_clock::now();
+          //scan_t[i] = duration_cast<microseconds>(stop - start).count();
+          //start = high_resolution_clock::now();
+          //self->send(radix_move, r_keys_in, r_keys_out, r_values_in,
+                     //r_values_out, r_counters, r_prefixes, offset);
+        //});
+        //self->receive([&](uref&, uref&, uref&, uref&, uref&, uref&) { });
+        //dev->synchronize();
+        //stop = high_resolution_clock::now();
+        //move_t[i] = duration_cast<microseconds>(stop - start).count();
+      //}
+      //input_r = r_keys_out;
+      //rids_r = r_values_out;
+      //size_t total_t = 0;
+      //total_t = 0;
+      //cout << "count: ";
+      //for (auto t : count_t){
+        //cout << setw(10) << t << "us";
+        //total_t += t;
+      //}
+      //cout << " = " << total_t  << "us" << endl;
+      //total_t = 0;
+      //cout << "scan:  ";
+      //for (auto t : scan_t){
+        //cout << setw(10) << t << "us";
+        //total_t += t;
+      //}
+      //cout << " = " << total_t  << "us" << endl;
+      //total_t = 0;
+      //cout << "move:  ";
+      //for (auto t : move_t){
+        //cout << setw(10) << t << "us";
+        //total_t += t;
+      //}
+      //cout << " = " << total_t  << "us" << endl;
+    //}
 
 #ifdef WITH_CPU_TESTS
     auto test_input = values;

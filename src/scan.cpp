@@ -109,7 +109,7 @@ tuple<uvec,uvec> scan_blocks(const vector<T>& input, const size_t block_size) {
     from = block * block_size;
     to = min(from + block_size, input.size());
   }
-  return {blocks,increments};
+  return make_tuple(blocks,increments);
 }
 
 /*****************************************************************************\
@@ -166,18 +166,18 @@ void caf_main(actor_system& system, const config& cfg) {
   }
   // ---- get device ----
   auto& mngr = system.opencl_manager();
-  auto opt = mngr.get_device_if([&](const device_ptr dev) {
+  auto opt = mngr.find_device_if([&](const device_ptr dev) {
       if (cfg.device_name.empty())
         return true;
-      return dev->get_name() == cfg.device_name;
+      return dev->name() == cfg.device_name;
   });
   if (!opt) {
-    opt = mngr.get_device_if([&](const device_ptr) { return true; });
+    opt = mngr.find_device_if([&](const device_ptr) { return true; });
     if (!opt) {
       cout << "No device found." << endl;
       return;
     }
-    cerr << "Using device '" << (*opt)->get_name() << "'." << endl;
+    cerr << "Using device '" << (*opt)->name() << "'." << endl;
   }
 
   // ---- general ----
@@ -185,7 +185,7 @@ void caf_main(actor_system& system, const config& cfg) {
   auto prog = mngr.create_program_from_file("./include/scan.cl", "", dev);
   {
     // ---- funcs ----
-    auto half_block = dev->get_max_work_group_size() / 2;
+    auto half_block = dev->max_work_group_size() / 2;
     auto get_size = [half_block](size_t n) -> size_t {
       return round_up((n + 1) / 2, half_block);
     };
