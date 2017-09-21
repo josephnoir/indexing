@@ -53,34 +53,20 @@ public:
 void caf_main(actor_system&, const config& cfg) {
   std::vector<uint32_t> values;
   if (cfg.filename.empty()) {
-    values = {10,  7, 22,  6,  7,  1,  9, 42,  2,  5,
-              13,  3,  2,  1,  0,  1, 18, 18,  3, 13,
-               5,  9,  0,  3,  2, 19,  5, 23, 22, 10,
-               6, 22};
+    std::cout << "Pleas sepcify a file with inout data using '-f'" << std::endl;
+    return;
   } else {
-    //cout << "Reading data from '" << cfg.filename << "' ... " << flush;
     ifstream source{cfg.filename, std::ios::in};
     uint32_t next;
-    while (source >> next) {
+    while (source >> next)
       values.push_back(next);
-    }
   }
   auto amount = values.size();
-  //cout << "'" << amount << "' values." << endl;
   auto bound = cfg.bound;
   if (bound == 0 && amount > 0) {
     auto itr = max_element(values.begin(), values.end());
     bound = *itr;
   }
-  //cout << "Maximum value is '" << bound << "'." << endl;
-
-  /*
-  // Extract key set
-  vector<uint32_t> keys = values;
-  std::sort(keys.begin(), keys.end());
-  auto last = std::unique(keys.begin(), keys.end());
-  keys.erase(last, end(keys));
-  */
 
   auto start = high_resolution_clock::now();
   bitmap_index<uint32_t, equality_coder<wah_bitmap>> bmi{bound + 1};
@@ -88,19 +74,7 @@ void caf_main(actor_system&, const config& cfg) {
     bmi.push_back(val);
   auto stop = high_resolution_clock::now();
 
-  //if (cfg.print_results) {
-    //// print index by key
-    //auto& coder = bmi.coder();
-    //cout << coder << endl;
-    //[>
-    //auto& storage = coder.storage();
-    //for (auto& key : keys)
-      //cout << "Index for value " << key << ":" << endl
-           //<< storage[key] << endl;
-    //*/
-  //}
-  cout //<< "Time: "
-       << duration_cast<microseconds>(stop - start).count() << " us" << endl;
+  cout << duration_cast<microseconds>(stop - start).count() << " us" << endl;
 }
 
 CAF_MAIN()

@@ -129,39 +129,6 @@ string as_binary(T num) {
   return s.str();
 }
 
-/*
-string decoded_bitmap(const uvec& bitmap) {
-  if (bitmap.empty()) {
-    return "";
-  }
-  stringstream s;
-  for (auto& block : bitmap) {
-    if (block & (0x1 << 31)) {
-      uval mask = 0x1;
-      for (int i = 0; i < 31; ++i) {
-        s << ((block & mask) ? '1' : '0');
-        mask <<= 1;
-      }
-    } else {
-      auto bit = (block & (0x1 << 30)) ? '1' : '0';
-      auto times = (block & (~(0x3 << 30)));
-      for (uval i = 0; i < times; ++i) {
-        for (uval j = 0; j < 31; ++j) {
-          s << bit;
-        }
-      }
-    }
-  }
-  auto res = s.str();
-  // auto tmp = res.size();
-  // s.str(string());
-  // s << tmp;
-  //return s.str();
-  res.erase(res.find_last_not_of("0") + 1);
-  return res;
-}
-*/
-
 template <class T, typename std::enable_if<is_integral<T>{}, int>::type = 0>
 uval as_uval(T val) { return static_cast<uval>(val); }
 
@@ -418,12 +385,7 @@ void caf_main(actor_system& system, const config& cfg) {
     cerr << "No device found." << endl;
     return;
   }
-  //cout << "Using device '" << (*opt)->name() << "'." << endl;
   auto dev = *opt;
-
-#ifdef WITH_CPU_TESTS
-  // Create test data
-#endif // WITH_CPU_TESTS
 
   // load kernels from source
   auto prog_rids   = mngr.create_program_from_file(kernel_file_01, "", dev);
@@ -810,75 +772,6 @@ void caf_main(actor_system& system, const config& cfg) {
       rids_r = r_values_out;
     }
 
-    //{
-      //// radix sort for values by key using inpt as keys and temp as values
-      //auto r_keys_in = input_r;
-      //auto r_values_in = rids_r;
-      //auto r_keys_out = dev->scratch_argument<uval>(n, buffer_type::input_output);
-      //auto r_values_out = dev->scratch_argument<uval>(n, buffer_type::input_output);
-      //// TODO: see how performance is affected if we create new arrays each time
-      //auto r_counters = dev->scratch_argument<uval>(counters);
-      //auto r_prefixes = dev->scratch_argument<uval>(prefixes);
-      //uint32_t iterations = cardinality / l_val;
-      //vector<size_t> count_t(iterations);
-      //vector<size_t> scan_t(iterations);
-      //vector<size_t> move_t(iterations);
-      //auto start = high_resolution_clock::now();
-      //auto stop = high_resolution_clock::now();
-      //for (uint32_t i = 0; i < iterations; ++i) {
-        //uval offset = l_val * i;
-        //if (i > 0) {
-          //std::swap(r_keys_in, r_keys_out);
-          //std::swap(r_values_in, r_values_out);
-        //}
-        //start = high_resolution_clock::now();
-        //self->send(radix_count, r_keys_in, r_counters, offset);
-        //self->receive([&](uref&, uref&) {
-          //dev->synchronize();
-          //stop = high_resolution_clock::now();
-          //count_t[i] = duration_cast<microseconds>(stop - start).count();
-          //start = high_resolution_clock::now();
-          //self->send(radix_scan, r_keys_in, r_counters, r_prefixes, offset);
-        //});
-        //self->receive([&](uref&, uref&, uref&) {
-          //dev->synchronize();
-          //stop = high_resolution_clock::now();
-          //scan_t[i] = duration_cast<microseconds>(stop - start).count();
-          //start = high_resolution_clock::now();
-          //self->send(radix_move, r_keys_in, r_keys_out, r_values_in,
-                     //r_values_out, r_counters, r_prefixes, offset);
-        //});
-        //self->receive([&](uref&, uref&, uref&, uref&, uref&, uref&) { });
-        //dev->synchronize();
-        //stop = high_resolution_clock::now();
-        //move_t[i] = duration_cast<microseconds>(stop - start).count();
-      //}
-      //input_r = r_keys_out;
-      //rids_r = r_values_out;
-      //size_t total_t = 0;
-      //total_t = 0;
-      //cout << "count: ";
-      //for (auto t : count_t){
-        //cout << setw(10) << t << "us";
-        //total_t += t;
-      //}
-      //cout << " = " << total_t  << "us" << endl;
-      //total_t = 0;
-      //cout << "scan:  ";
-      //for (auto t : scan_t){
-        //cout << setw(10) << t << "us";
-        //total_t += t;
-      //}
-      //cout << " = " << total_t  << "us" << endl;
-      //total_t = 0;
-      //cout << "move:  ";
-      //for (auto t : move_t){
-        //cout << setw(10) << t << "us";
-        //total_t += t;
-      //}
-      //cout << " = " << total_t  << "us" << endl;
-    //}
-
 #ifdef WITH_CPU_TESTS
     auto test_input = values;
     uvec test_rids(test_input.size());
@@ -915,7 +808,6 @@ void caf_main(actor_system& system, const config& cfg) {
 
 #ifdef SHOW_TIME_CONSUMPTION
     dev->synchronize();
-    //cout << "DONE: sort_rids_by_value" << endl;
     to = high_resolution_clock::now();
     cout << DESCRIPTION("Sort:\t\t\t")
          << duration_cast<microseconds>(to - from).count() << " us" << endl;
@@ -963,7 +855,6 @@ void caf_main(actor_system& system, const config& cfg) {
 
 #ifdef SHOW_TIME_CONSUMPTION
     dev->synchronize();
-    //cout << "DONE: produce_chunk_id_literals" << endl;
     to = high_resolution_clock::now();
     cout << DESCRIPTION("Chunks + literals:\t")
          << duration_cast<microseconds>(to - from).count()<< " us" << endl;
@@ -976,10 +867,8 @@ void caf_main(actor_system& system, const config& cfg) {
     self->receive([&](uref&, uref&, uref& heads) {
       heads_r = heads;
     });
-    // cout << "Created heads array" << endl;
     self->send(merge_scan, heads_r, lits_r);
     self->receive([&](uref&) { });
-    //cout << "Merged values" << endl;
     // stream compact inpt, chid, lits by heads value
     uref blocks_r;
     uval len = as_uval(n);
@@ -996,29 +885,24 @@ void caf_main(actor_system& system, const config& cfg) {
     self->receive([&](uref& results) {
       blocks_r = std::move(results);
     });
-    //cout << "Count step done." << endl;
     // TODO: Can we do this concurrently?
     self->send(sc_move, input_r, heads_r, blocks_r, len);
     self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
       k = res[0];
       std::swap(input_r, out);
     });
-    //cout << "Merge step done (input)." << endl;
     self->send(sc_move, chids_r, heads_r, blocks_r, len);
     self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
       k = res[0];
       std::swap(chids_r, out);
     });
-    // cout << "Merge step done (chids)." << endl;
     self->send(sc_move, lits_r, heads_r, blocks_r, len);
     self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
       k = res[0];
       std::swap(lits_r, out);
     });
-    // cout << "Merge step done (lits)." << endl;
 
 #ifdef SHOW_TIME_CONSUMPTION
-    // cout << "DONE: merge_lit_by_val_chids." << endl;
     to = high_resolution_clock::now();
     cout << DESCRIPTION("Merge literals:\t\t")
          << duration_cast<microseconds>(to - from).count()<< " us" << endl;
@@ -1065,7 +949,6 @@ void caf_main(actor_system& system, const config& cfg) {
 
 #ifdef SHOW_TIME_CONSUMPTION
     dev->synchronize();
-    // cout << "DONE: produce fills." << endl;
     to = high_resolution_clock::now();
     cout << DESCRIPTION("Produce fills:\t\t")
          << duration_cast<microseconds>(to - from).count()<< " us" << endl;
@@ -1093,12 +976,10 @@ void caf_main(actor_system& system, const config& cfg) {
     self->receive([&](uvec& res, uref&, uref& out, uref&, uref&) {
       index_length = res[0];
       index_r = out;
-      //cout << "Merge step done." << endl;
     });
 
 #ifdef SHOW_TIME_CONSUMPTION
     dev->synchronize();
-    //cout << "DONE: fuse_fill_literals." << endl;
     to = high_resolution_clock::now();
     cout << DESCRIPTION("Fuse:\t\t\t")
          << duration_cast<microseconds>(to - from).count()<< " us" << endl;
@@ -1117,7 +998,6 @@ void caf_main(actor_system& system, const config& cfg) {
       heads_r = move(heads);
     });
 
-    // cout << "Col: prepare done." << endl;
     // --- segmented scan ---
     auto values_copy = dev->copy(tmp_r);
     auto heads_copy = dev->copy(heads_r);
